@@ -1529,3 +1529,32 @@ radio state restored and health checks passed. The receiving Mac found no
 transmitter entry in 211 observations. Native AirDrop remains unavailable.
 The next isolated comparison uses the fragmentable discovery profile for the
 four-window series while preserving the strict management-TX selector.
+
+## Discovery-profile TX series — 2026-10-11
+
+Source `c39e00a6138e7872012a59050bdda6e588434306` (revision 55), binary
+`ef92a890c5ba1855c2e95203ff04ece22464007c4fef6b9cddca310670a597ca`, loaded
+UUID `FCFC288B-48D2-3CA0-9DD7-25B805C37400`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38075594356)
+passed all three jobs. Local UBSan/Python tests, both ABI comparisons and the
+384-contract baseline passed. Rollback is revision 54.
+
+The single behavioral change uses configuration 2 (discovery) for selector
+34's periodic four-frame series. This run completed all four unicasts at
+12 Mbps with no retries, failed/pending/aborted frames, or firmware fault
+events. It received matching START and END notifications and stopped normally.
+Unlike revision 54, it did not trigger the expiry assertion. This is one
+controlled comparison, not proof of general firmware-lifecycle reliability.
+
+The first encoded-clock-to-completion bound was **25,215 us**; the subsequent
+three were under 2 ms. The observation completed, but the unchanged 5 ms timing
+qualification still failed. The receiving Mac found no transmitter entry in
+211 observations, with its own entry present throughout. Native synchronization,
+RX handoff and AirDrop remain unavailable.
+
+Listener and P2P RX regressions passed, including a 5-second receive lease with
+40 selected-peer frames and no invalid frames or fault events. Across all
+harnesses WPA2 passed 60/60 pings, the retained manager stayed unchanged, and
+GPU/display/power checks passed after restoration. The next investigation
+compares the actual native supplementary template's known identity/election
+fields with the staged radio state, without assuming a malformed advertisement.

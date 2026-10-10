@@ -6,6 +6,7 @@
 #include <Airport/macOS15/IO80211ManagementBuffer.h>
 #include <AWDL/AwdlNativeFrame.h>
 #include <AWDL/AwdlTxCompletion.h>
+#include <AWDL/AwdlTemplateProfile.h>
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
 #include <libkern/c++/OSSymbol.h>
@@ -684,6 +685,7 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
             trace.backend_after = object->backendCalls;
             saved.template_length = object->syncTemplate.length();
             saved.template_revision = object->syncTemplate.revision();
+            object->publishTemplateProfile();
             // ActionTemplate validated every TLV before owning these bytes.
             for (size_t pos = 0; pos < saved.template_length;) {
                 const auto p = object->syncTemplate.bytes() + pos;
@@ -710,6 +712,46 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
         snapshot.bsd_present = object->getBSDInterface() != nullptr;
         return kIOReturnSuccess;
     }, &call);
+}
+
+void ItlAwdlNativeInterface::publishTemplateProfile() {
+    ItlAwdl::TemplateProfile p = {};
+    removeProperty("AX201NativeTemplateProfile");
+    if (!stagedSyncRoleValid || !electionMetricValid ||
+        !ItlAwdl::profileActionTemplate(syncTemplate, selfAddress.ether_addr_octet,
+            stagedSyncRole.master, electionMetric, &p)) return;
+    auto d = OSDictionary::withCapacity(36);
+    if (!d) return;
+    const auto put = [&](const char *key, uint32_t value) {
+        auto n = OSNumber::withNumber(value, 32);
+        if (n) { d->setObject(key, n); n->release(); }
+    };
+    put("template_length", p.length); put("template_revision", syncTemplate.revision());
+    put("tlv_count", p.tlvs);
+    put("data_path_count", p.dataPath.count); put("data_path_length", p.dataPath.length);
+    put("data_path_prefix_valid", p.dataPath.prefixValid); put("data_path_flags", p.dataPath.flags);
+    put("data_path_social_channels", p.dataPath.socialChannels);
+    put("data_path_extension_flags", p.dataPath.extensionFlags);
+    put("data_path_unparsed_bytes", p.dataPath.trailingBytes);
+    put("data_path_awdl_address_present", p.dataPath.awdlAddressPresent);
+    put("data_path_awdl_address_unicast", p.dataPath.awdlAddressUnicast);
+    put("data_path_awdl_address_matches_source", p.dataPath.awdlAddressMatchesSource);
+    put("election_count", p.election.count); put("election_length", p.election.length);
+    put("election_prefix_valid", p.election.prefixValid);
+    put("election_master_unicast", p.election.masterUnicast); put("election_sync_unicast", p.election.syncUnicast);
+    put("election_master_matches_source", p.election.masterMatchesSource);
+    put("election_master_matches_sync_role", p.election.masterMatchesSyncRole);
+    put("election_sync_matches_source", p.election.syncMatchesSource);
+    put("election_sync_matches_master", p.election.syncMatchesMaster);
+    put("election_master_counter", p.election.masterCounter); put("election_self_counter", p.election.selfCounter);
+    put("election_distance", p.election.distance); put("election_master_metric", p.election.masterMetric);
+    put("election_self_metric", p.election.selfMetric);
+    put("election_self_metric_matches_backend", p.election.selfMetricMatchesBackend);
+    put("version_count", p.version.count); put("version_length", p.version.length);
+    put("version_prefix_valid", p.version.prefixValid); put("version", p.version.version);
+    put("device_class", p.version.deviceClass);
+    put("service_count", p.serviceCount); put("service_length", p.serviceLength);
+    setProperty("AX201NativeTemplateProfile", d); d->release();
 }
 
 size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &context,

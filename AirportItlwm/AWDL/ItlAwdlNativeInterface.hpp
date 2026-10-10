@@ -132,6 +132,7 @@ private:
     uint32_t bsdPublishCalls, bsdPrepareCalls, bsdPrepareError;
     uint32_t bsdEnableCalls, bsdEnableDenied;
     void describeBSD(ItlAwdlNativeBSDResponse *);
+    void publishTemplateProfile();
     size_t encodeQualificationFrame(uint32_t, uint8_t *, size_t,
         const ItlAwdl::LocalSyncBoundary * = nullptr, uint16_t sequence = 0,
         const uint8_t *unicastPeer = nullptr);

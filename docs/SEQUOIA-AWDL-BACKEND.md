@@ -6,6 +6,24 @@ No Apple binaries or disassembly are distributed here. Addresses identify the
 observed unslid symbols; they are not runtime patch targets. None of these
 observations establish a functioning native interface.
 
+## Supplementary-template consistency profile
+
+After the native template producer runs, `AX201NativeTemplateProfile` describes
+its actual owned snapshot. It includes TLV counts/lengths, version/device class,
+data-path flags and social-channel field, and the election-v2 fixed fields.
+Addresses are represented only by unicast and equality checks against the
+native sender and staged sync master; no address or raw template is exported.
+The infrastructure MAC is skipped separately from an explicit AWDL address.
+An absent explicit AWDL-address field is reported as absent, not malformed.
+
+The data-path parser checks every conditional field through the extension-flags
+word. Remaining extension bytes are counted as unparsed: `prefix_valid` does
+not mean the whole TLV, native receiver behavior or AirDrop has been validated.
+Duplicate known TLVs retain their counts and only the first is profiled.
+This observation does not alter the snapshot, RF frames, native state or radio
+lifecycle. The fixed layouts follow the [OWL definitions](https://github.com/seemoo-lab/owl/blob/master/src/frame.h)
+and [Wireshark dissector](https://github.com/wireshark/wireshark/blob/master/epan/dissectors/packet-awdl.c).
+
 ## Owned-peer unicast qualification
 
 Selector 31 / capability bit 1048576 uses the existing begin request and
