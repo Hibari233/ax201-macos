@@ -1611,3 +1611,33 @@ WPA2 passed 33/33 pings across the baseline and TX harness. The retained
 manager was unchanged and GPU/display/power checks passed after restoration.
 Separate listener/P2P receive-only regression leases were not repeated for
 this template-only change. Native AirDrop remains unavailable.
+
+## Synchronization compatibility flags — 2026-10-11
+
+Source `8f99d06f143dac0a9a88c076a02aec50bbd6dd4d` (revision 58), binary
+`ca7bfad48bf1290f10d9393365e82e6e59190a4044e97d3726f1c022fa624267`, loaded
+UUID `97A3481D-FCAB-3F3E-8E5C-7035E8F65795`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38078484201)
+passed all three jobs. Local UBSan/Python checks, both ABI comparisons and the
+384-contract baseline passed. Rollback is revision 57.
+
+With the isolated `0x1800` synchronization-flag change, all four unicast frames
+completed successfully without retries or firmware-fault events. The first
+encoded-clock-to-completion bound was 29,100 us; subsequent fresh-clock bounds
+were 389, 1,488 and 1,467 us. Timing qualification still failed. The receiving
+Mac again had no transmitter entry in 211 observations. This comparison does
+not establish that the flag change improves discovery.
+
+A new read-only receiving-Mac IOReport observer recorded 369 input/processed
+action frames over 191 samples, with no increase in invalid-frame, queue-drop
+or AWDL-off-drop counters. These are interface-wide counters, not evidence that
+the four test frames reached this receiver. Both observers covered the whole
+radio lease. The native raw-BPF interface yielded no records, so it provided
+no independent RF proof either.
+
+WPA2 passed 33/33 pings and post-test health checks passed. The Ethernet SSH
+path temporarily failed, but the same boot remained accessible through its
+verified Wi-Fi SSH host key. Its Ethernet route to the controller had an
+incomplete ARP entry; an outbound Ethernet ping resolved it and restored that
+path. This was a management-network interruption, not an observed panic or
+firmware reset. Native AirDrop remains unavailable.
