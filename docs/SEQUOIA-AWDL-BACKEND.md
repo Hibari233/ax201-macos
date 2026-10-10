@@ -77,14 +77,16 @@ in `VALIDATION.md` when available.
 Root-only selector 20 additionally attaches an initialized role-6 object,
 calls the native `start()` chain, inspects its peer-manager ownership, then
 stops, detaches and releases it. Capability bit 1024 identifies this probe.
-It uses the same exact-build/device checks and radio gate, accepts 1–4 cycles,
-and refuses existing native AWDL objects. Registry matching cannot start the
+It uses the same exact-build/device checks and radio gate, accepts 1–4 injected
+failure cycles but only **one real creation per boot**, and refuses existing
+native AWDL objects. Registry matching cannot start the
 backend; only this synchronous probe sets its private start permission.
 
 ```
 sudo build/tools/awdl_native_init start-selftest
 sudo build/tools/awdl_native_init start 1 1  # deliberately fail peer creation
 sudo build/tools/awdl_native_init start 1 0  # native start/stop
+sudo build/tools/awdl_native_init start-denied # reopen client; second creation must be denied
 ```
 
 The injected failure returns null from this subclass's peer-manager factory,
@@ -102,11 +104,40 @@ The first 24H32 run exposed deferred object release: both the injected-failure
 and successful-start paths returned with one interface instance still counted,
 but the following userspace count was zero (11 ms after the successful call).
 The probe now performs one cycle per gate acquisition and waits outside the
-gate, at most 250 one-millisecond sleeps, for native cleanup before repeating.
+gate, at most 250 one-millisecond sleeps, for native cleanup to settle.
 An atomic lease excludes other lifecycle probes during that wait. A timeout
 fails the request and prevents another cycle; ordinary Wi-Fi callbacks remain
 able to run. No deferred release is counted as settled merely because stop
 returned.
+
+### Recreating the native manager panics on 24H32
+
+Revision 13's subsequent real-start request triggered a confirmed page fault
+at address `0xb8`. Its stack was the asynchronous `setPowerState` callback,
+virtual-interface logging, `IO80211PeerManager::vlogDebug`, CoreCapture, and
+`vsnprintf`. The machine had not slept. Waiting for object counts to reach zero
+does not fix this failure.
+
+Local inspection found that `PeerManager::initWithInterface` allocates shared
+log buffers only when an atomic allocation counter's old value is zero.
+`PeerManager::free` frees and clears those buffers but does not reset that
+counter. A later manager therefore skips allocation. Its text-log path adds
+the log-header length `0xb8` to the null buffer before formatting it as a
+string, matching the panic. This observation is specific to the inspected
+24H32 binary; it is not a claim about every macOS version.
+
+The containment is a boot-scoped registry latch named
+`AX201NativePeerManagerAttempted`, consumed immediately before native creation,
+even if native creation fails. A subsequent real-creation request returns
+`kIOReturnNotPermitted` before initialization. Multi-cycle real creation is a
+bad argument. Closing the client or unloading this kext does not clear the
+registry latch. Injected failures never enter native creation and do not consume
+it. Apple's code and private global state are not modified.
+
+This limits a diagnostic that proved unsafe; it does not qualify repeated
+native teardown. A future operational backend must retain one native manager
+through multiple discovery/transfer sessions. Recreating it after teardown
+remains unavailable for this build.
 
 Reports include settled native peer-manager instance counts, balanced opens, disposal,
 backend call counts and unexpected BSD interfaces. A passing lifecycle probe

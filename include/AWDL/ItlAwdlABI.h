@@ -92,6 +92,8 @@ struct ItlAwdlNativeInitResponse {
 };
 // Native start/stop only: no BSD/queue registration, link enable or radio TX.
 // fail_peer_creation == 1 injects failure at our createPeerManager override.
+// Real creation permits one cycle, once per boot; subsequent calls return
+// kIOReturnNotPermitted. Injected failures permit 1..4 cycles without a manager.
 struct ItlAwdlNativeStartRequest {
     uint32_t version, iterations, fail_peer_creation, reserved;
 };

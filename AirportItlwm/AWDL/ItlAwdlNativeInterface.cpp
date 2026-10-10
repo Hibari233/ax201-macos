@@ -10,6 +10,20 @@ namespace {
 // Native log/service detach may defer the final release until the work queue
 // gate opens. Serialize both probe entry points while waiting outside that gate.
 volatile UInt32 nativeProbeActive = 0;
+// 24H32 PeerManager::free clears shared log buffers without resetting their
+// allocation-once counters. A second native manager can panic in a PM callout.
+// Keep this latch in the boot's registry root, so closing a client or unloading
+// this kext cannot permit recreation. Never patch Apple's private globals.
+const char nativePeerAttemptKey[] = "AX201NativePeerManagerAttempted";
+bool nativePeerAttempted() {
+    auto root = IORegistryEntry::getRegistryRoot();
+    return !root || root->getProperty(nativePeerAttemptKey);
+}
+bool reserveNativePeerAttempt() {
+    auto root = IORegistryEntry::getRegistryRoot();
+    return root && !root->getProperty(nativePeerAttemptKey) &&
+        root->setProperty(nativePeerAttemptKey, kOSBooleanTrue);
+}
 struct NativeProbeLease {
     bool owned;
     NativeProbeLease() : owned(OSCompareAndSwap(0, 1, &nativeProbeActive)) {}
@@ -85,6 +99,9 @@ bool ItlAwdlNativeInterface::start(IOService *provider) {
 void *ItlAwdlNativeInterface::createPeerManager() {
     ++peerCreationCalls;
     if (!startAllowed || failPeerCreation) return nullptr;
+    // Consume immediately before entering native creation, including its
+    // partial failures. The caller holds the lifecycle lease and radio gate.
+    if (!reserveNativePeerAttempt()) return nullptr;
     return IO80211VirtualInterface::createPeerManager();
 }
 
@@ -127,6 +144,8 @@ IOReturn ItlAwdlNativeInterface::probeStartGated(AirportItlwm *parent, ItlIwx *r
     if (result) return result;
     if (status.session != ItlAwdlIdle || parent->getAwdlInterface()) return kIOReturnBusy;
     if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+    if (!request->fail_peer_creation && nativePeerAttempted())
+        return kIOReturnNotPermitted;
     out->live_before = metaClass->getInstanceCount();
     if (out->live_before) return kIOReturnBusy;
     auto peerClass = nativePeerClass();
@@ -202,7 +221,8 @@ IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeStartRequest *request, ItlAwdlNativeStartResponse *out) {
     if (!parent || !radio || !out || !request || request->version != ITL_AWDL_ABI_VERSION ||
         request->reserved || !request->iterations || request->iterations > 4 ||
-        request->fail_peer_creation > 1) return kIOReturnBadArgument;
+        request->fail_peer_creation > 1 ||
+        (!request->fail_peer_creation && request->iterations != 1)) return kIOReturnBadArgument;
     auto gate = radio->getMainCommandGate();
     if (!gate) return kIOReturnNotReady;
     NativeProbeLease lease;

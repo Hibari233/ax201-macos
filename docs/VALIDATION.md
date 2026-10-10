@@ -202,15 +202,20 @@ count was zero, so this is not a qualification of any firmware request.
 Four consecutive deliberately failed peer creations then passed. **During the
 following four-cycle normal-start request, the management connection was lost**;
 neither completion nor post-test health was available. IPv4 and IPv6 SSH both
-failed afterwards. A kernel crash has not yet been confirmed from a panic
-report. Repeated normal start/stop is therefore **not qualified**, and the
+failed afterwards. After the user reported a frozen display and restarted, a
+panic report confirmed a page fault at `0xb8` in peer-manager logging from an
+asynchronous native power callback. No system sleep preceded the panic.
+Repeated normal start/stop is therefore **not qualified**, and the
 planned concurrent-client and final Wi-Fi checks did not complete. Revision 12
 is retained for rollback. These probes are never started automatically at boot.
 
 An earlier build (`ec266b1`) returned before native interface release settled;
 the successful single-start trial's following userspace count was zero at
 11 ms. Revision 13's outside-gate wait addresses that observation, but it does
-not establish the cause of the later connection loss. Native packet queues,
+not address the native shared-log allocation lifetime issue subsequently found
+in the [backend audit](SEQUOIA-AWDL-BACKEND.md#recreating-the-native-manager-panics-on-24h32).
+The next source revision restricts real creation to one attempt per boot; its
+hardware validation must be reported separately. Native packet queues,
 BSD registration and AirDrop transfers remain unimplemented.
 
 ## Required hardware matrix before a binary release
@@ -226,7 +231,7 @@ BSD registration and AirDrop transfers remain unimplemented.
 | Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
 | Native role-6 object initialization/disposal | 27 bounded cycles passed; start, queues and BSD registration still pending |
-| Native role-6 start/stop | Single cycle passed; repeated normal startup lost connectivity, unresolved |
+| Native role-6 start/stop | Single cycle passed; recreation caused a confirmed logging panic on 24H32; boot-scoped containment under validation |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |

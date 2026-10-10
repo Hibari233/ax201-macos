@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Root-only native ABI/lifecycle checks. No radio or BSD interface activation.
 #include <IOKit/IOKitLib.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <AWDL/ItlAwdlABI.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +64,7 @@ static int startInvalidRequests(io_connect_t client) {
     request.version = 0; check("version", startInvoke(client, request, out)); request.version = 1;
     request.iterations = 0; check("zero iterations", startInvoke(client, request, out));
     request.iterations = 5; check("too many iterations", startInvoke(client, request, out)); request.iterations = 1;
+    request.iterations = 2; check("repeated real creation", startInvoke(client, request, out)); request.iterations = 1;
     request.fail_peer_creation = 2; check("unknown failure", startInvoke(client, request, out)); request.fail_peer_creation = 0;
     request.reserved = 1; check("reserved", startInvoke(client, request, out));
     printf("{\"invalid_start_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
@@ -73,7 +75,12 @@ static int startRun(io_connect_t client, uint32_t iterations, uint32_t fail) {
     ItlAwdlNativeStartRequest request = {ITL_AWDL_ABI_VERSION, iterations, fail, 0};
     ItlAwdlNativeStartResponse out = {};
     auto result = startInvoke(client, request, out);
-    if (result) { fprintf(stderr, "Native start: 0x%x\n", result); return 1; }
+    if (result) {
+        fprintf(stderr, "Native start: 0x%x\n", result);
+        if (result == kIOReturnNotPermitted)
+            fprintf(stderr, "Native peer creation already attempted this boot; reboot before another attempt.\n");
+        return 1;
+    }
     printf("{");
 #define FIELD(name) printf("\"" #name "\":%u,", out.name)
     FIELD(version); FIELD(attempted); FIELD(initialized); FIELD(attached);
@@ -106,20 +113,43 @@ static bool number(const char *text, uint32_t *value) {
     return true;
 }
 
+// Call only after the one successful real-start trial. Reopen the user client
+// to verify that client lifetime does not reset the boot-scoped restriction.
+static int startDenied(io_connect_t client) {
+    auto root = IORegistryGetRootEntry(kIOMainPortDefault);
+    auto attempted = root ? IORegistryEntryCreateCFProperty(root,
+        CFSTR("AX201NativePeerManagerAttempted"), kCFAllocatorDefault, 0) : nullptr;
+    if (root) IOObjectRelease(root);
+    const bool reserved = attempted && CFEqual(attempted, kCFBooleanTrue);
+    if (attempted) CFRelease(attempted);
+    if (!reserved) {
+        fprintf(stderr, "Run the single real-start trial first; boot latch is absent.\n");
+        return 2;
+    }
+    ItlAwdlNativeStartRequest request = {ITL_AWDL_ABI_VERSION, 1, 0, 0};
+    ItlAwdlNativeStartResponse out = {};
+    auto result = startInvoke(client, request, out);
+    printf("{\"second_native_creation_denied\":%s,\"result\":%u}\n",
+        result == kIOReturnNotPermitted ? "true" : "false", result);
+    return result == kIOReturnNotPermitted ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     const bool selftest = argc == 2 && !strcmp(argv[1], "selftest");
     const bool denied = argc == 2 && !strcmp(argv[1], "denied");
     const bool run = argc == 4 && !strcmp(argv[1], "run");
     const bool startSelftest = argc == 2 && !strcmp(argv[1], "start-selftest");
     const bool start = argc == 4 && !strcmp(argv[1], "start");
+    const bool startDeniedTest = argc == 2 && !strcmp(argv[1], "start-denied");
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
-    if ((!selftest && !run && !denied && !startSelftest && !start) ||
+    if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
         (start && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 4 ||
                    !number(argv[3], &request.stop_after) || request.stop_after > 1))) {
         fprintf(stderr, "Usage: awdl_native_init selftest | denied | run ITERATIONS(1..8) STOP_AFTER(0..2)\n"
-                        "       awdl_native_init start-selftest | start ITERATIONS(1..4) FAIL_PEER(0..1)\n");
+                        "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
+                        "Real peer creation requires ITERATIONS=1 and is limited to once per boot.\n");
         return 2;
     }
     if ((denied && geteuid() == 0) || (!denied && geteuid() != 0)) {
@@ -138,6 +168,7 @@ int main(int argc, char **argv) {
     if (result) { fprintf(stderr, "Open: 0x%x\n", result); return 1; }
     if (selftest) { int code = invalidRequests(client); IOServiceClose(client); return code; }
     if (startSelftest) { int code = startInvalidRequests(client); IOServiceClose(client); return code; }
+    if (startDeniedTest) { int code = startDenied(client); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};
     result = invoke(client, request, out);
