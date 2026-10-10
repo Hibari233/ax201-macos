@@ -1299,6 +1299,7 @@ enum iwx_msix_ivar_for_cause {
 #define IWX_UCODE_TLV_API_ADWELL_HB_DEF_N_AP    57
 #define IWX_UCODE_TLV_API_SCAN_EXT_CHAN_VER    58
 #define IWX_UCODE_TLV_API_BAND_IN_RX_DATA       59
+#define IWX_UCODE_TLV_API_SMART_FIFO_OFFLOAD    68
 #define IWX_NUM_UCODE_TLV_API            128
 
 #define IWX_UCODE_TLV_API_BITS \

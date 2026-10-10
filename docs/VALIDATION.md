@@ -982,3 +982,32 @@ There was no positive control establishing management-frame visibility, so
 this capture cannot show whether the peer received the transmission. That
 trial restored Wi-Fi (9/9 router pings) and passed the retained health checks.
 No further identical RF trial is justified by those empty captures.
+
+## Listener MAC parameter correction — 2026-10-10
+
+Source `1a1832616409d3ba566e1e47fd0d62ff27883080` (revision 38):
+
+- Binary SHA-256: `36ac90efb2b4269492a59decd91bc2524db52fc26c2c299334bdc387c9276b33`
+- Loaded UUID: `E73A10BB-505A-3845-BB2B-BD35276DCEC3`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38058462471)
+  passed all three jobs. Local UBSan and both native ABI comparisons passed;
+  installation retained a verified revision 37 rollback.
+
+All 384 initialization contracts, native configuration/template and two passive
+RF regressions passed. The listener MAC now supplied basic rates and all four
+standard OFDM EDCA entries during the native TX lease, instead of leaving them
+zero. The next TX trial still failed at **32,095 us** after one successful
+firmware completion. The matching DMA response was first observed 31,313 us
+after the doorbell; its interrupt filter ran at 31,931 us. Firmware media
+duration remained 168 us, with zero retry and Bluetooth-kill counters.
+
+This correction alone did not resolve the observed latency. The trial stopped
+without pending or aborted TX, restored WPA2 (36/36 router pings across the
+harnesses), and passed retained health assertions. An early boot health check
+ran before the first display-composition success; its read-only recheck passed
+once that activity started. The post-test health check passed as well.
+
+No native interface, queue, discovery or AirDrop transfer was enabled. The next
+controlled change follows Intel's non-STA Smart FIFO policy rather than using
+the associated-station policy for this listener. This remains a hypothesis to
+test, not a confirmed explanation of actual RF timing.

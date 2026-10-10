@@ -873,3 +873,18 @@ the native TX qualification lease. Ordinary STA and passive monitor paths are
 unchanged. It is a configuration correction to test, not a demonstrated cause
 of the 25–37 ms completion delay. The 5 ms completion guard remains in force;
 native interface enablement and operational synchronization remain disabled.
+
+### Listener Smart FIFO policy
+
+The generic RUN path selects Smart FIFO `FULL_ON`, including in monitor mode.
+Intel's [Smart FIFO state selection in Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/mvm/sf.c)
+instead selects `UNINIT` for a single non-STA interface and reserves `FULL_ON`
+for an associated station. The explicit native TX lease now follows that
+non-STA policy, retaining the port's existing command and timeout encoding.
+Host configuration is skipped when firmware advertises API bit 68 (Smart FIFO
+offload). Normal STA and passive monitor policy are unchanged.
+
+This provides a separate controlled test of firmware buffering after the
+listener MAC parameter correction alone failed timing qualification. It does
+not shorten or fabricate the measured TX interval. Native enablement, the
+four-frame bound and the 5 ms completion guard are unchanged.

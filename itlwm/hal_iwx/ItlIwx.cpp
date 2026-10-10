@@ -10519,6 +10519,16 @@ int ItlIwx::
 iwx_sf_config(struct iwx_softc *sc, int new_state)
 {
     struct ieee80211com *ic = &sc->sc_ic;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeRadioOwner && awdlNativeTxQualification &&
+        ic->ic_opmode == IEEE80211_M_MONITOR) {
+        // Intel's sf_update uses UNINIT for a single non-STA MAC. FULL_ON
+        // assumes an associated AP, which this explicit listener lease lacks.
+        // Firmware advertising SF offload does not take host configuration.
+        if (isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_SMART_FIFO_OFFLOAD)) return 0;
+        if (new_state == IWX_SF_FULL_ON) new_state = IWX_SF_UNINIT;
+    }
+#endif
     struct iwx_sf_cfg_cmd sf_cmd = {
         .state = htole32(new_state),
     };
