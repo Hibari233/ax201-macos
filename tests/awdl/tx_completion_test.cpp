@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <AWDL/AwdlTxCompletion.h>
+#include <AWDL/AwdlAck.h>
 #include <assert.h>
 #include <initializer_list>
 #include <stdio.h>
@@ -7,6 +8,31 @@
 using namespace ItlAwdl;
 
 int main() {
+    const uint8_t sender[6] = {2,1,2,3,4,5};
+    uint8_t ack[14] = {0xd4,0,0,0,2,1,2,3,4,5,0,0,0,0};
+    uint32_t delay = 0xfeed;
+    for (size_t n=0;n<=sizeof(ack);++n) {
+        delay = 0xfeed;
+        const bool match = matchOwnedAck(ack,n,sender,100,300,&delay);
+        assert(match == (n==10));
+        assert(delay == (match ? 200U : 0xfeedU));
+    }
+    assert(matchOwnedAck(ack,10,sender,0xfffffff0U,0x20,&delay) && delay==48);
+    assert(!matchOwnedAck(ack,10,sender,100,100,&delay));
+    assert(!matchOwnedAck(ack,10,sender,100,99,&delay));
+    assert(matchOwnedAck(ack,10,sender,100,100100,&delay) && delay==100000);
+    assert(!matchOwnedAck(ack,10,sender,100,100101,&delay));
+    assert(!matchOwnedAck(nullptr,10,sender,100,300,&delay));
+    assert(!matchOwnedAck(ack,10,nullptr,100,300,&delay));
+    assert(!matchOwnedAck(ack,10,sender,100,300,nullptr));
+    for (unsigned i=4;i<10;++i) {
+        ack[i]^=2; assert(!matchOwnedAck(ack,10,sender,100,300,&delay)); ack[i]^=2;
+    }
+    ack[0]=0xc4; assert(!matchOwnedAck(ack,10,sender,100,300,&delay)); ack[0]=0xd4;
+    for (uint8_t flags : {uint8_t(1),uint8_t(2),uint8_t(4),uint8_t(0x40),uint8_t(0x80)}) {
+        ack[1]=flags; assert(!matchOwnedAck(ack,10,sender,100,300,&delay));
+    }
+    ack[1]=0x10; assert(matchOwnedAck(ack,10,sender,100,300,&delay)); ack[1]=0;
     // Independently specified RX header + TX response + SCD next-sequence.
     // Offsets are relative to the full RX buffer, not a packed C++ struct.
     uint8_t buffer[256]={};

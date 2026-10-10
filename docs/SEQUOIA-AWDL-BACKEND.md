@@ -24,6 +24,16 @@ behavior, unlike a broadcast. Firmware success alone still does not prove
 native AWDL acceptance, correct on-air timestamps, or AirDrop functionality.
 No legacy TX ACK flag is inserted into the incompatible gen3 command format.
 
+The unicast trace additionally observes CRC-valid monitor ACK frames addressed
+to the native sender, within 100 ms of its current transmission. It records
+the existing RX descriptor's GP2 value and host delivery time; it neither
+requests new firmware events nor changes RX ownership, interrupts or queues.
+An ACK has no sender address or sequence number, so a match is timing evidence
+correlated with this single outstanding transmission, not separate proof of
+peer identity. A missing monitor ACK is inconclusive because firmware may not
+forward solicited ACKs. These samples do not replace the 5 ms completion guard
+or manufacture a TX timestamp.
+
 ## Lifecycle
 
 `IO80211VirtualInterface::createPeerManager()` at `0xffffff80022a4926`

@@ -188,6 +188,8 @@ private:
         uint32_t nextSequence, packetLength, dmaProbeSamples, dmaPendingMax, dmaScanTruncated;
         uint32_t dmaStatus, dmaMediaUs;
         uint32_t commandOffloadAssist, commandHeaderLength;
+        uint32_t ackCount, firstAckGp2, lastAckGp2;
+        uint64_t firstAckHostUs;
         uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
         uint16_t peerWindowCounter;
         uint8_t peerWindowChannel;

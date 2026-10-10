@@ -8,6 +8,7 @@
 #include <AWDL/AwdlRxClock.h>
 #include <AWDL/AwdlSyncAction.h>
 #include <AWDL/AwdlTxCompletion.h>
+#include <AWDL/AwdlAck.h>
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -567,6 +568,16 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         };
         put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
         put("unicast",t.unicast);
+        put("ack_samples",t.ackCount);
+        if (t.ackCount) {
+            put("first_ack_from_frame_gp2_us",uint32_t(ItlAwdl::clockDelta(t.firstAckGp2,t.frameGp2)));
+            put("last_ack_from_frame_gp2_us",uint32_t(ItlAwdl::clockDelta(t.lastAckGp2,t.frameGp2)));
+            if (t.firstAckHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+                put("first_ack_delivered_after_doorbell_host_us",t.firstAckHostUs-t.doorbellHostUs);
+            const auto afterAck = ItlAwdl::clockDelta(t.completeGp2,t.firstAckGp2);
+            if (t.completed && t.clockValid && afterAck>=0)
+                put("first_ack_to_completion_gp2_us",uint32_t(afterAck));
+        }
         put("qid",t.qid); put("index",t.index);
         put("command_offload_assist",t.commandOffloadAssist);
         put("command_header_length",t.commandHeaderLength);
@@ -975,8 +986,24 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     ++awdl.rxTotal;
     size_t length = mbuf_pkthdr_len(m);
     // RX MPDUs are contiguous here. Reject unexpectedly fragmented buffers.
-    if (mbuf_len(m) != length || length < 24) return;
+    if (mbuf_len(m) != length) return;
     auto bytes = static_cast<const uint8_t *>(mbuf_data(m));
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated &&
+        channel == awdl.channel && awdlNativeTraceIndex < awdlNativeTraceCount &&
+        awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+        auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+        uint32_t delay = 0;
+        // The firmware may deliver the ACK MPDU after its TX notification in
+        // the same RX batch. Keep observing this lease after pending becomes
+        // zero; the hardware-clock bound rejects older/later transmissions.
+        if (trace.unicast && trace.doorbellHostUs && ItlAwdl::matchOwnedAck(bytes,length,
+            awdlNativeAddress,trace.frameGp2,gp2,&delay)) {
+            if (!trace.ackCount) { trace.firstAckGp2 = gp2; trace.firstAckHostUs = awdlNowUs(); }
+            trace.lastAckGp2 = gp2;
+            ++trace.ackCount;
+        }
+    }
+    if (length < 24) return;
     if (awdl.dataStatus.enabled && channel == awdl.channel && ItlAwdl::equalMac(bytes + 10, awdl.peer))
         awdlObserveData(bytes, length, channel, rssi, gp2, deaggregated);
     if (length < 29) return;
