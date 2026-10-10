@@ -5,6 +5,7 @@
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlNativeMetadata.h>
 #include <AWDL/AwdlActionTemplate.h>
+#include <AWDL/AwdlSyncAction.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -49,6 +50,10 @@ public:
     // context must already use the synchronization backend's local RX clock.
     // No RF callback is connected until that clock/backend is qualified.
     IOReturn receiveAction(const uint8_t *, size_t, const ItlAwdl::NativeActionRxContext &);
+    // Snapshot the staged template plus caller-supplied radio sync context.
+    // Requires the work-loop gate, but does not transmit or imply RF readiness.
+    size_t copySyncAction(const ItlAwdl::SyncActionContext &, const ItlAwdl::SyncActionParameters &,
+                          uint8_t *, size_t);
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \

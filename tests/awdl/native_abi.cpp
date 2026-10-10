@@ -7,6 +7,14 @@
 #include <Airport/macOS15/IOSkywalkRxCompletionQueue.h>
 #include <Airport/macOS15/IO80211ManagementBuffer.h>
 #include <AWDL/AwdlNativeEvents.h>
+#include <AWDL/AwdlSyncAction.h>
+
+// Compile the portable encoder using kernel flags as well as the host tests.
+size_t sequoiaSyncActionCompileFixture(const ItlAwdl::SyncActionContext &context,
+    const ItlAwdl::SyncActionParameters &parameters, const ItlAwdl::ActionTemplate &extra,
+    uint8_t *output, size_t capacity) {
+    return ItlAwdl::buildSyncAction(context, parameters, extra, output, capacity);
+}
 
 // Force compiler vtables for every packet base, including the pool release
 // override. Compare these object-file relocations to the target's native ABI.

@@ -384,6 +384,39 @@ source mismatch, fragments, size limits, channel/RSSI/clock rejection and TSF
 union validity. The two management-buffer compile fixtures matched 71 native
 virtual slots; this establishes declarations, not live receive behavior.
 
+## Synchronization action output
+
+`copySyncAction` now combines the owned native supplementary template with a
+caller-supplied synchronization context under the controller work-loop gate.
+The portable encoder produces a complete PSF or MIF MPDU without FCS, with a
+bounded synchronization TLV, a 16-entry channel sequence and the saved native
+TLVs. It supports simple and operating-class channel encodings; legacy bonded
+encoding remains unsupported. Maximum output is 628 bytes. The kernel entry
+refuses absent templates, inactive/disposed objects, a wrong OS build or a
+missing gate. It does not submit the resulting bytes to firmware.
+
+The wire format was checked against
+[Wireshark's AWDL dissector](https://github.com/wireshark/wireshark/blob/ad85ea3cb5af4e9665f1b3e3cda5bee94b71ab73/epan/dissectors/packet-awdl.c)
+and [Open Wireless Link's protocol declarations](https://github.com/seemoo-lab/owl/blob/da255a70f221784c836d943dd3f243bc798f223b/src/frame.h).
+Bounds, clock and frame-subtype validation, output-capacity rejection, sequence and
+32-bit clock wraps, unavailable channel slots, and template ownership are
+covered offline. A supplementary sync TLV or conflicting/duplicate channel
+sequence is rejected. Failed encoding leaves output bytes untouched, and the
+caller receives zero length. The initialization probe additionally checks the
+concrete template-to-frame entry using synthetic addresses and time in CPU
+memory; its new runtime coverage remains pending until that binary is loaded.
+
+Two synthetic PCAP specimens were independently decoded by Wireshark: a PSF
+with simple channels and a MIF with operating classes and a clock wrap. Both
+decoded the intended sync counters, periods, timestamps and channel encodings
+without expert-format errors. These were generated files, not radio captures.
+
+This codec preserves explicitly supplied timing and channel fields. The
+backend must still provide coherent radio-clock state, validate regulatory and
+channel-width support, select real availability windows and account for
+firmware submission delay. Native election/configuration, actual synchronization
+transmission, AW event delivery and peer acceptance remain unimplemented.
+
 ## Request extents
 
 ### Availability-window event representation

@@ -72,6 +72,16 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_syn
     return kIOReturnSuccess;
 }
 
+size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &context,
+    const ItlAwdl::SyncActionParameters &parameters, uint8_t *output, size_t capacity) {
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
+        resourcesDisposed || isInactive() || !syncTemplate.length()) return 0;
+    // The same gate serializes template replacement. The caller owns the
+    // returned MPDU bytes and must independently qualify firmware submission.
+    return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, output, capacity);
+}
+
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
     const ItlAwdl::NativeActionRxContext &rx) {
     ItlAwdl::NativeActionMetadata metadata = {};
@@ -815,7 +825,32 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     failed |= concrete->syncTemplate.revision() != revision ||
         concrete->syncTemplate.length() != sizeof(expected) ||
         memcmp(concrete->syncTemplate.bytes(), expected, sizeof(expected));
+    // Serialize that owned snapshot through the concrete gate-checked entry.
+    // Synthetic clock/addresses stay in CPU memory; this does not call TX.
+    ItlAwdl::SyncActionContext context = {{2, 1, 2, 3, 4, 5}, {2, 6, 7, 8, 9, 10},
+                                         0, 0x123, 100032, 100000, true};
+    ItlAwdl::SyncActionParameters parameters = {};
+    parameters.nextChannel = parameters.masterChannel = 6;
+    parameters.downCounterTu = 32;
+    parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
+    parameters.actionPeriodTu = 110;
+    parameters.presence = parameters.plan.step_aw = 4;
+    memcpy(parameters.master, context.source, 6);
+    for (auto &channel : parameters.plan.channels) channel = 6;
+    uint8_t frame[106] = {};
+    frame[105] = 0xa5;
+    const auto length = concrete->copySyncAction(context, parameters, frame, 105);
+    ItlAwdl::SyncAnnouncement decoded = {};
+    failed |= length != 105 || frame[105] != 0xa5 ||
+        memcmp(frame + 100, expected, sizeof(expected)) ||
+        ItlAwdl::parseSchedule(frame, length, &decoded) != ItlAwdl::ScheduleResult::Valid ||
+        decoded.tx_delay_us != 32 || decoded.aw_period_tu != 16 || decoded.presence != 4;
+    context.clockValid = false;
+    frame[0] = 0x5a;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     concrete->syncTemplate.clear();
+    context.clockValid = true;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;
     ether_addr address = {{2, 0, 0, 0, 0, 1}};
     ++out->methods_checked;

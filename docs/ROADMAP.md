@@ -29,8 +29,11 @@ requirement to complete WPA3 before AWDL.
    native discovery and actual bidirectional file transfers with matching hashes.
    Revision 14 verifies one retained native manager across diagnostic clients;
    the operational design must reuse it because recreation after native teardown
-   panics on the inspected 24H32 image. Queue ownership and registration remain
-   the next integration work, not a demonstrated AirDrop capability.
+   panics on the inspected 24H32 image. Revision 18 qualifies disabled native
+   BSD queues. Revision 20 qualifies owned supplementary templates and passive
+   receive-clock validity. Synchronization action/event codecs now compile and
+   pass offline checks; native configuration, real RF scheduling, enabled queue
+   callbacks and peer acceptance are the next integration work.
 4. Return to WPA3: trace Apple WCL SAE/PMF ownership, implement the missing
    authentication/key lifecycle, and qualify it separately from AirDrop.
 

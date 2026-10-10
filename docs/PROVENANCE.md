@@ -22,6 +22,9 @@ offline tests and CI with no automatic release publication.
 - [OpenBSD](https://github.com/openbsd/src): net80211 and Intel driver foundations.
 - [acidanthera/MacKernelSDK](https://github.com/acidanthera/MacKernelSDK): pinned kernel build headers/library; fetched separately, not vendored here.
 - [Intel Linux wireless firmware](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/): firmware already carried by the upstream tree.
+- [Wireshark AWDL dissector](https://github.com/wireshark/wireshark/blob/ad85ea3cb5af4e9665f1b3e3cda5bee94b71ab73/epan/dissectors/packet-awdl.c)
+  and [Open Wireless Link protocol declarations](https://github.com/seemoo-lab/owl/blob/da255a70f221784c836d943dd3f243bc798f223b/src/frame.h):
+  public wire-format references for the independently written bounded codecs.
 
 ## License boundaries
 
