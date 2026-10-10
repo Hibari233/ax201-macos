@@ -223,8 +223,9 @@ They use `IOSkywalkTxSubmissionQueue` and `IOSkywalkRxCompletionQueue` through
 audited 24H32 declarations. The common base is `IOEventSource`, with native
 extents `0xd8`, `0x168` and `0x138`. Initialization, finalization and array RX
 enqueue return `IOReturn`; zero means success. Unused, unaudited entry points
-remain private aliases. Separate driver metaclasses add no virtual overrides
-and allow counting only the objects owned by the diagnostic.
+remain private aliases. Separate driver metaclasses count only driver-owned
+objects. Revision 18 additionally wraps initialization/finalization for status
+reporting, as described in the BSD publication section below.
 
 ```
 sudo build/tools/awdl_native_queues selftest
@@ -316,6 +317,15 @@ or reboot; live unpublication is not yet a supported control. This is a staged
 integration boundary, not native AirDrop support or sleep/unload qualification.
 Runtime evidence and failures are recorded separately in `VALIDATION.md`.
 
+On 24H32, a successful `ifconfig awdl0 up` does **not** prove operational
+enable. The native BSD client's flags ioctl first tries `adjustInterfaceEnable`.
+If enable fails, it clears its enabled state and `IFF_RUNNING`, then invokes
+the provider's BSD command handler and returns that handler's status. The
+administrative `IFF_UP` flag can remain set with a zero ioctl return. The
+runtime check therefore verifies rejected enable calls, clear `IFF_RUNNING`,
+disabled queues and zero callbacks; it does not treat command exit status as
+radio readiness. No native error-return or flag state is patched.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
@@ -355,8 +365,8 @@ return success for unimplemented firmware operations, and not proof that all
 values; changing return conventions globally would lose these specific native
 fallbacks.
 
-Next: validate started-interface teardown, remaining required request sizes,
-action/data output ownership, firmware MAC/PHY contexts, and native RX queue
-metadata before instantiating and registering an interface. Default capability
+Next: implement action/data ownership, firmware MAC/PHY contexts and peer
+scheduling, and qualify live BSD teardown and native RX metadata before
+enabling radio transport. Default capability
 bits must continue to describe the implemented Wi-Fi driver, not an unverified
 AirDrop service.

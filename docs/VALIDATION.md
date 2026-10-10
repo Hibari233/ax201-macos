@@ -289,8 +289,8 @@ The diagnostic object was retired at the end; nothing starts it at boot.
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Tested image identities through revision 16b verified; release matrix remains incomplete |
-| WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 15/15 Wi-Fi pings in revision 16b; sustained throughput pending |
+| Fresh public-fork binary boot and loaded-hash verification | Tested image identities through revision 18 verified; release matrix remains incomplete |
+| WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 12/12 Wi-Fi pings around revision 18 publication; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
 | WPA3-only with mandatory PMF, wrong password, rekey | Unsupported / pending implementation |
@@ -299,7 +299,7 @@ The diagnostic object was retired at the end; nothing starts it at boot.
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
 | Native role-6 object initialization/disposal | Revision 14 passed 32 cycles and 2,048 dispatch checks with deferred cleanup accounted for |
 | Native role-6 start/stop | One retained object reused across clients, then retired; recreation denied after the confirmed 24H32 logging panic |
-| Native packet/queue ownership | Packet memory and disabled queue setup, reuse, rejection and teardown qualified; enabled queues and BSD delivery pending |
+| Native packet/queue ownership | Packet memory and unpublished cleanup qualified; revision 18 attached BSD and initialized real netif queues; enabled delivery and live BSD teardown pending |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |
@@ -452,3 +452,60 @@ low-memory paths, reporting-service lock ordering, live BSD shutdown, enabled
 transport, peer scheduling/discovery and bidirectional file transfers remain
 unqualified. The boot latch is consumed and the test object is retired; a
 new native peer requires reboot, while normal queue reuse did not.
+
+## Native BSD attachment — 2026-10-10
+
+Source `dc61c3abf899e298c3c5d43d2e10e20c71d8d275` (revision 18), AX201 /
+Sequoia 15.8.1 (24H32):
+
+- Binary SHA-256: `81ca9827e832ff907e37d370a39172e5d4e0e0b2653efbdb589437cb46f423f9`
+- Loaded UUID: `C7A00E11-25BF-3FCA-ADDD-A3C299F62A6C`; loaded identity and
+  external EFI hash matched after reboot. The revision 17 rollback was verified.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38041420277)
+  passed Linux ASan/UBSan and both Sequoia variants (AWDL: 79 sources), the
+  native fixture and seven diagnostic clients. Local UBSan passed. The actual
+  interface matched 560 native virtual slots/63 backend methods, and the two
+  queue subclasses matched 189 slots with lifecycle wrappers accounted for.
+
+One retained interface was explicitly published. Native matching attached one
+`IOSkywalkNetworkBSDClient` and prepared a real `awdl0` ifnet. Both TX and RX
+queues received native kernel queue contexts and initialized once, with zero
+reported preparation/initialization errors. Three subsequent publication
+requests kept the same interface identity and did not publish or prepare again.
+Nothing publishes the diagnostic interface automatically at boot.
+
+The first harness stopped on an incorrect expectation that `ifconfig awdl0 up`
+would return an error. It returned zero even though the driver recorded one
+rejected enable and both queues remained disabled. Local inspection confirmed
+that the native BSD client clears `IFF_RUNNING` on this failure, then returns
+the provider's flags-command result; administrative `IFF_UP` is independent.
+This was a harness expectation failure, not a passing operational-enable test.
+
+A continuation on the **same retained object**, without changing the driver,
+tested three more down/up cycles. All four enable attempts reached the
+`kIOReturnNotReady` rejection; `IFF_RUNNING` stayed clear, queues stayed disabled,
+and no queue callback ran. Native queue initialization counts stayed one each.
+The final administrative state was down. Manual transport clear and session
+retirement were rejected while BSD remained attached, preserving its resources.
+Live BSD unpublication, queue finalization and provider removal were not tested.
+
+Seven malformed requests were rejected, and publication without a session or
+without registration returned `kIOReturnNotReady`. Before publication, the older
+disabled-queue regression passed 16 packet leases and 12,624 byte comparisons,
+with all owned objects returning to zero. Ordinary WPA2 router pings passed
+**12/12** around publication and the continued checks. No new panic report
+appeared. Display/GPU health checks passed at the existing 1920×1080, 240 Hz,
+with unchanged hashes and zero GPU I/O failures/flip-latch timeouts; these are
+configuration/counter checks, not a new visual confirmation.
+
+The native configuration selected MTU 1484 while the prototype registration
+requested 1428; transmit limits/offload behavior require qualification before
+delivery. Native logs also recorded an existing Ethernet BPF attachment and an
+event-monitor entitlement denial. These are retained as unresolved integration
+observations, not suppressed or counted as working BPF/event delivery.
+
+This establishes BSD attachment and real queue initialization only. There was
+**no enabled radio, packet delivery, peer discovery or AirDrop transfer**. The
+interface/peer/pool remain retained for native ownership; their live teardown,
+firmware scheduling, action/data transport and full transfer matrix are still
+unfinished.
