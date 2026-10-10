@@ -19,6 +19,10 @@ extern "C" IOReturn nativeAwdlConfigure(OSObject *)
     __asm__("__ZN22IO80211AWDLPeerManager9configureEv");
 extern "C" IOReturn nativeAwdlUpdateTemplate(OSObject *, bool)
     __asm__("__ZN22IO80211AWDLPeerManager23updateSyncFrameTemplateEb");
+extern "C" void nativeAwdlSelectChannels(OSObject *)
+    __asm__("__ZN22IO80211AWDLPeerManager26selectChannelsToUseForAWDLEv");
+extern "C" uint32_t nativeAwdlSocialChannels(OSObject *)
+    __asm__("__ZN22IO80211AWDLPeerManager28getSupportedSocialChannelMapEv");
 extern "C" IOReturn nativeAwdlGetSyncParams(OSObject *, apple80211_awdl_sync_params *)
     __asm__("__ZN22IO80211AWDLPeerManager17getAwdlSyncParamsEP27apple80211_awdl_sync_params");
 extern "C" IOReturn nativeAwdlSetSyncParams(OSObject *, apple80211_awdl_sync_params *)
@@ -679,13 +683,23 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
             // and calls the owned-template backend, not synchronization enable.
             trace.attempted = 1;
             trace.backend_before = object->backendCalls;
+            // Normally called by the native interface-state transition.
+            // This unpublished qualification object has not had that event.
+            // The audited 24H32 selector only derives native CPU channel
+            // state; do not fabricate a bitmap or change controller flags.
+            const auto socialBefore = nativeAwdlSocialChannels(state->peerManager);
+            nativeAwdlSelectChannels(state->peerManager);
+            const auto socialAfter = nativeAwdlSocialChannels(state->peerManager);
+            const uint32_t requiredSocial = object->masterChannel == 6 ? 1U :
+                object->masterChannel == 44 ? 2U : object->masterChannel == 149 ? 4U : 0U;
             object->backendTrace = &trace;
-            trace.native_result = static_cast<uint32_t>(nativeAwdlUpdateTemplate(state->peerManager, true));
+            trace.native_result = static_cast<uint32_t>(requiredSocial && (socialAfter & requiredSocial) ?
+                nativeAwdlUpdateTemplate(state->peerManager, true) : kIOReturnUnsupported);
             object->backendTrace = nullptr;
             trace.backend_after = object->backendCalls;
             saved.template_length = object->syncTemplate.length();
             saved.template_revision = object->syncTemplate.revision();
-            object->publishTemplateProfile();
+            object->publishTemplateProfile(socialBefore, socialAfter);
             // ActionTemplate validated every TLV before owning these bytes.
             for (size_t pos = 0; pos < saved.template_length;) {
                 const auto p = object->syncTemplate.bytes() + pos;
@@ -714,7 +728,7 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
     }, &call);
 }
 
-void ItlAwdlNativeInterface::publishTemplateProfile() {
+void ItlAwdlNativeInterface::publishTemplateProfile(uint32_t socialBefore, uint32_t socialAfter) {
     ItlAwdl::TemplateProfile p = {};
     removeProperty("AX201NativeTemplateProfile");
     if (!stagedSyncRoleValid || !electionMetricValid ||
@@ -728,6 +742,8 @@ void ItlAwdlNativeInterface::publishTemplateProfile() {
     };
     put("template_length", p.length); put("template_revision", syncTemplate.revision());
     put("tlv_count", p.tlvs);
+    put("native_social_channels_before", socialBefore);
+    put("native_social_channels_after", socialAfter);
     put("data_path_count", p.dataPath.count); put("data_path_length", p.dataPath.length);
     put("data_path_prefix_valid", p.dataPath.prefixValid); put("data_path_flags", p.dataPath.flags);
     put("data_path_social_channels", p.dataPath.socialChannels);

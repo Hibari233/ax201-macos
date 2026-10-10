@@ -1558,3 +1558,28 @@ harnesses WPA2 passed 60/60 pings, the retained manager stayed unchanged, and
 GPU/display/power checks passed after restoration. The next investigation
 compares the actual native supplementary template's known identity/election
 fields with the staged radio state, without assuming a malformed advertisement.
+
+## Native template field inspection — 2026-10-11
+
+Source `19541244a095713873ed80c3b32b136869e41e16` (revision 56), binary
+`3267e83748cb988595a731b880befe883771cac44cd8ca1497018cf414a22732`, loaded
+UUID `7BEE1032-345D-3011-A3E2-7FC738FF1B6B`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38076467765)
+passed all three jobs. Local UBSan/Python tests, both ABI comparisons and the
+384-contract baseline passed. Rollback is revision 55. This revision changed
+only template observation; no additional RF trial was run.
+
+The 110-byte native supplementary template contained four TLVs. Election v2
+had valid unicast master/sync identities matching both the native sender and
+staged role, distance zero, and master/self metric 65 matching the backend.
+Its counters were zero. The version TLV reported `0x93`, device class 1.
+The 47-byte data-path payload had flags `0x9f03`, extension flags `0x002d`,
+and a structurally readable known prefix with 18 unparsed extension bytes.
+No explicit AWDL-address field was present; this is not itself a parse error.
+
+The data-path **social-channel map was zero**, despite the qualified radio
+using channel 6. Static inspection traced this to native channel selection
+normally called from an interface-state transition absent in this diagnostic.
+Whether the receiving Mac rejects this declaration is not yet established.
+WPA2 passed 24/24 baseline pings and health checks passed after inspection.
+Native synchronization, discovery, RX handoff and AirDrop remain unavailable.

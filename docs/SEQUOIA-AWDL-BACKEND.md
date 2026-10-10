@@ -24,6 +24,20 @@ This observation does not alter the snapshot, RF frames, native state or radio
 lifecycle. The fixed layouts follow the [OWL definitions](https://github.com/seemoo-lab/owl/blob/master/src/frame.h)
 and [Wireshark dissector](https://github.com/wireshark/wireshark/blob/master/epan/dissectors/packet-awdl.c).
 
+On 24H32, `selectChannelsToUseForAWDL()` writes the native supported-social
+bitmap used by the data-path producer. Its observed caller is
+`interfaceStateChange`; the unpublished diagnostic had not received that
+transition, and revision 56's actual template reported a zero social map.
+Before creating the qualification template, the diagnostic now calls this
+exported native selector and reads `getSupportedSocialChannelMap()` before and
+after. Both inspected functions operate on retained CPU state; the selector's
+only observed calls are logging/metaclass access. Neither enables RF nor sends
+a driver ioctl. No private field or controller capability is written by this
+driver. Template generation refuses a native map that excludes the staged
+master channel. All firmware regulatory/TX guards remain independent.
+This addresses a confirmed missing initialization step; its effect on receiving
+Mac discovery requires a separate hardware comparison.
+
 ## Owned-peer unicast qualification
 
 Selector 31 / capability bit 1048576 uses the existing begin request and
