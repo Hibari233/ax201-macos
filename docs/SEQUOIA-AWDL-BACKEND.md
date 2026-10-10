@@ -38,6 +38,17 @@ master channel. All firmware regulatory/TX guards remain independent.
 This addresses a confirmed missing initialization step; its effect on receiving
 Mac discovery requires a separate hardware comparison.
 
+The bounded qualification encoder now sets synchronization flags to `0x1800`,
+matching the owned Mac's observed advertisements and
+[OWL's wire encoder](https://github.com/seemoo-lab/owl/blob/master/src/tx.c).
+It previously left the zero-initialized flags unchanged, despite the codec's
+independent wire fixture already using `0x1800`. The meaning of these bits and
+whether they explain missing peer discovery are not established. This is an
+isolated compatibility comparison: native supplementary TLVs, protection
+profile, destinations, timing checks and TX bounds are unchanged. It neither
+sets the native synchronization-enabled state nor treats TX success as peer
+acceptance.
+
 ## Owned-peer unicast qualification
 
 Selector 31 / capability bit 1048576 uses the existing begin request and

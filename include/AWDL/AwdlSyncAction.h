@@ -7,6 +7,10 @@
 #include "AwdlSchedule.h"
 
 namespace ItlAwdl {
+// Compatibility wire value used by OWL's sync-parameter encoder and observed
+// on the owned receiving Mac. Individual bit semantics are not established;
+// this does not assert that a native manager or radio is synchronized.
+constexpr uint16_t SyncCompatibilityFlags = 0x1800;
 struct SyncActionParameters {
     uint8_t nextChannel, masterChannel, guardTime;
     uint16_t downCounterTu, awPeriodTu, actionPeriodTu, flags;

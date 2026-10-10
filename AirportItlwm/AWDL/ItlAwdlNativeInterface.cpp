@@ -810,6 +810,7 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
     ItlAwdl::SyncActionParameters parameters = {};
     parameters.masterChannel = parameters.nextChannel = uint8_t(masterChannel);
     if (!syncParameters.apply(parameters)) return 0;
+    parameters.flags = ItlAwdl::SyncCompatibilityFlags;
     parameters.presence = uint8_t(presenceMode);
     parameters.downCounterTu = uint16_t(parameters.awPeriodTu * parameters.presence);
     parameters.minExtension = extensionCounts[0];

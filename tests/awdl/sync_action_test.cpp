@@ -13,7 +13,7 @@ int main() {
     SyncActionParameters s = {};
     s.nextChannel = s.masterChannel = 6; s.downCounterTu = 32;
     s.awPeriodTu = s.extensionTu = s.commonTu = 16;
-    s.actionPeriodTu = 110; s.flags = 0x1800; s.presence = 4;
+    s.actionPeriodTu = 110; s.flags = SyncCompatibilityFlags; s.presence = 4;
     s.minExtension = s.maxMulticastExtension = s.maxUnicastExtension = s.maxActionExtension = 3;
     memcpy(s.master, c.source, 6); s.counter = 0x1234; s.apAlignment = 0xabcd;
     s.plan.step_aw = 4;
