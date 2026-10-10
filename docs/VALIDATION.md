@@ -1066,6 +1066,21 @@ owned-peer actions. No invalid frame was counted; diagnostic-ring drops were
 0 and 2. No native RX handoff or radio transmission occurred.
 
 WPA2 restoration passed (33/33 router pings), as did before/after GPU, display
-and power assertions. No new TX trial was run: the staged values equal the
-previous constants and do not address the failed completion timing. Native
-AirDrop discovery and file transfers remain unverified and unavailable.
+and power assertions. This initial baseline did not repeat TX: the staged
+values equal the previous constants and do not address the failed completion
+timing. Native AirDrop discovery and file transfers remain unavailable.
+
+A subsequent trial added an independent, read-only native peer-database query
+on the owned receiving Mac. Across 214 samples over approximately 45 seconds,
+the receiver's own address was present but the selected transmitter address
+was not found; all queries succeeded. Only aggregate results and owned-address
+match offsets were retained. Database absence does not establish that no frame
+reached the air, and the query does not measure RF transmission time.
+
+That trial submitted one frame and received one successful firmware completion
+at **36,093 us**, failing the unchanged 5 ms bound. The matching closed DMA
+response was first seen at 35,478 us after the doorbell. No frame remained
+pending or aborted. The same disabled manager survived, WPA2 passed another
+9/9 router pings, and GPU/display/power assertions passed. The next diagnostic
+will qualify the receiving peer's advertised channel window as well as the
+local window before permitting another bounded transmission.

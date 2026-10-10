@@ -187,6 +187,9 @@ private:
         uint64_t dmaReplyHostUs;
         uint32_t nextSequence, packetLength, dmaProbeSamples, dmaPendingMax, dmaScanTruncated;
         uint32_t dmaStatus, dmaMediaUs;
+        uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
+        uint16_t peerWindowCounter;
+        uint8_t peerWindowChannel;
         bool completed, clockValid, dmaProbeSupported;
     } awdlNativeTrace[4] = {};
     uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;

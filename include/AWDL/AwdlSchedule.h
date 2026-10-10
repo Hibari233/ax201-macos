@@ -196,5 +196,35 @@ private:
     uint64_t host_ = 0;
     uint16_t counter_ = 0;
 };
+
+enum class PeerWindowResult : unsigned {
+    ClockUnqualified, ScheduleUnavailable, OtherChannel, Edge, Ready, Count
+};
+struct PeerTxWindow {
+    uint32_t elapsedUs, remainingUs;
+    uint16_t counter;
+    uint8_t channel;
+};
+// Additional restriction for the bounded native-template TX qualification.
+// Hearing a PSF on a discovery channel does not mean the advertised data
+// schedule includes that channel. This predicts availability; it does not
+// prove peer reception, authorize RF or enable native synchronization.
+inline PeerWindowResult qualifyPeerWindow(const ScheduleTracker &schedule,
+    uint32_t gp2, uint64_t hostUs, uint8_t channel, bool clockQualified, PeerTxWindow *out) {
+    if (out) *out = {};
+    if (!clockQualified) return PeerWindowResult::ClockUnqualified;
+    ScheduleSlot slot = {};
+    if (!out || !channel || !schedule.project(gp2, gp2, hostUs, &slot))
+        return PeerWindowResult::ScheduleUnavailable;
+    const auto elapsed = clockDelta(gp2, slot.start_gp2_us);
+    const auto remaining = clockDelta(slot.end_gp2_us, gp2);
+    if (elapsed < 0 || remaining <= 0) return PeerWindowResult::ScheduleUnavailable;
+    *out = {uint32_t(elapsed), uint32_t(remaining), slot.counter, slot.channel};
+    if (slot.channel != channel) return PeerWindowResult::OtherChannel;
+    // Keep clear of the peer's channel transition and retain the existing
+    // submission margin. The separate completion deadline remains 5 ms.
+    if (elapsed < 8 * TuUs || remaining <= 12000) return PeerWindowResult::Edge;
+    return PeerWindowResult::Ready;
+}
 }
 #endif

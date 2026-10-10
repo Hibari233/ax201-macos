@@ -255,6 +255,21 @@ revalidates the frame, source address, standard BSSID and clock. It accepts no
 userspace payload. The temporary monitor MAC uses the native interface's address
 and staged minimum OFDM rate; the ordinary STA address is not modified.
 
+The qualification also requires a fresh peer schedule with three coherent RX
+clock samples. The peer must advertise the selected channel at the current
+GP2 time, at least 8 TU after its window begins and with more than 12 ms left.
+The final clock read rechecks both peer and local remaining time before the
+doorbell. This is a conservative restriction on this diagnostic, not a claim
+that every protocol discovery PSF follows the advertised data-channel plan.
+In particular, receiving a discovery PSF on channel 6 does not imply the peer
+advertises a channel-6 communication window.
+
+Both passive and TX qualifications publish `AX201NativePeerWindow` after
+cleanup: clock/schedule rejection counts, channel mismatch, edge/ready counts,
+local overlap and the last projected window's numeric fields. This exposes no
+packet bytes or device identities. The counters describe predictions, not RF
+reception. Individual TX timing records include the final projected margins.
+
 Completion samples GP2 again to bound total elapsed time conservatively. This
 includes firmware queueing and completion delivery; it is **not** a measured
 on-air timestamp. The trial stops further submissions after a firmware failure,

@@ -67,6 +67,29 @@ int main() {
     assert(slot.counter == 0 && slot.channel == 6 && slot.start_gp2_us == 99900 && slot.end_gp2_us == 165436);
     assert(projected.project(165435, 132868, 1032868, &slot) && slot.channel == 6);
     assert(projected.project(165436, 132868, 1032868, &slot) && slot.channel == 149 && slot.counter == 4);
+    // A recently heard discovery PSF is insufficient when the peer's
+    // advertised schedule is on another channel. Qualify clock correlation,
+    // confidence, both transition margins and freshness independently.
+    PeerTxWindow peerWindow = {};
+    ScheduleTracker empty;
+    assert(qualifyPeerWindow(empty,132868,1032868,6,true,&peerWindow)==PeerWindowResult::ScheduleUnavailable);
+    assert(qualifyPeerWindow(projected,132868,1032868,6,false,&peerWindow)==PeerWindowResult::ClockUnqualified);
+    assert(qualifyPeerWindow(projected,132868,1032868,6,true,&peerWindow)==PeerWindowResult::Ready);
+    assert(peerWindow.channel==6 && peerWindow.counter==0 && peerWindow.elapsedUs==32968 && peerWindow.remainingUs==32568);
+    assert(qualifyPeerWindow(projected,132868,1032868,149,true,&peerWindow)==PeerWindowResult::OtherChannel);
+    assert(qualifyPeerWindow(projected,165436,1065436,6,true,&peerWindow)==PeerWindowResult::OtherChannel);
+    assert(qualifyPeerWindow(projected,165436,1065436,149,true,&peerWindow)==PeerWindowResult::Edge);
+    assert(qualifyPeerWindow(projected,173627,1073627,149,true,&peerWindow)==PeerWindowResult::Edge);
+    assert(qualifyPeerWindow(projected,173628,1073628,149,true,&peerWindow)==PeerWindowResult::Ready);
+    assert(peerWindow.elapsedUs==8192);
+    assert(qualifyPeerWindow(projected,153435,1053435,6,true,&peerWindow)==PeerWindowResult::Ready);
+    assert(peerWindow.remainingUs==12001);
+    assert(qualifyPeerWindow(projected,153436,1053436,6,true,&peerWindow)==PeerWindowResult::Edge);
+    assert(qualifyPeerWindow(projected,153437,1053437,6,true,&peerWindow)==PeerWindowResult::Edge);
+    assert(qualifyPeerWindow(projected,132868,2032769,6,true,&peerWindow)==PeerWindowResult::ScheduleUnavailable);
+    assert(!peerWindow.remainingUs && !peerWindow.channel);
+    assert(qualifyPeerWindow(projected,132868,1032868,0,true,&peerWindow)==PeerWindowResult::ScheduleUnavailable);
+    assert(qualifyPeerWindow(projected,132868,1032868,6,true,nullptr)==PeerWindowResult::ScheduleUnavailable);
     uint32_t target = 0;
     assert(projected.nextWindow(150000, 1050000, 6, 150000, &slot, &target) && target == 155000);
     assert(projected.nextWindow(160000, 1060000, 6, 160000, &slot, &target));
@@ -87,6 +110,13 @@ int main() {
     assert(projected_wrap.observe(plan, uint32_t(0xfffff000U + 32768), 1032768, &a));
     assert(projected_wrap.project(61340, 28672, 1032768, &slot));
     assert(slot.counter == 0 && slot.channel == 6 && slot.start_gp2_us == 61340);
+    assert(qualifyPeerWindow(projected_wrap,28672,1032768,6,true,&peerWindow)==PeerWindowResult::Ready);
+    assert(peerWindow.counter==65532 && peerWindow.elapsedUs==32868 && peerWindow.remainingUs==32668);
+    assert(qualifyPeerWindow(projected_wrap,61340+8192,1077728,6,true,&peerWindow)==PeerWindowResult::Ready);
+    assert(peerWindow.counter==0 && peerWindow.elapsedUs==8192);
+    plan.master[2]=1; // A changed master invalidates the previous confidence.
+    assert(projected_wrap.observe(plan,0x9000U,1040960,&a) && a.reset);
+    assert(qualifyPeerWindow(projected_wrap,0x9000U,1040960,6,true,&peerWindow)==PeerWindowResult::ScheduleUnavailable);
     ClockCorrelation live;
     assert(live.observe(100000, 1000000, 1000010, true, 99900, 1000000) == 5);
     assert(live.observe(110000, 1010000, 1010010, true, 99900, 1000000) == 5);

@@ -465,7 +465,13 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     ItlAwdlClockResponse clock = {};
     result = awdlReadClock(&clock);
     const auto age = ItlAwdl::clockDelta(clock.gp2_us,gp2);
-    if (result || !(clock.flags&1) || age<0 || age>2000) return kIOReturnNotReady;
+    if (result || (clock.flags&7)!=7 || age<0 || age>2000) return kIOReturnNotReady;
+    ItlAwdl::PeerTxWindow peerWindow = {};
+    const int64_t localRemaining = int64_t(sync.down_counter_tu)*ItlAwdl::TuUs -
+        sync.tx_delay_us - age;
+    if (localRemaining <= 12000 || ItlAwdl::qualifyPeerWindow(awdl.schedule,
+        clock.gp2_us, clock.host_end_us, uint8_t(awdl.channel), true, &peerWindow) !=
+        ItlAwdl::PeerWindowResult::Ready) return kIOReturnNotReady;
     // There are no sleeping firmware queries between this freshness check and
     // submission. Completion samples a conservative delay bound, never an
     // invented on-air timestamp. The monitor uses the native source MAC/rate.
@@ -477,6 +483,11 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
     trace.packetLength = uint32_t(length);
     trace.freshHostUs = clock.host_end_us;
+    trace.peerWindowElapsedUs = peerWindow.elapsedUs;
+    trace.peerWindowRemainingUs = peerWindow.remainingUs;
+    trace.peerWindowCounter = peerWindow.counter;
+    trace.peerWindowChannel = peerWindow.channel;
+    trace.localWindowRemainingUs = uint32_t(localRemaining);
     awdlNativeTraceIndex = index; awdlNativeTraceCount = index + 1;
     __atomic_store_n(&awdlNativeFilterAbsolute, uint64_t(0), __ATOMIC_RELAXED);
     __atomic_store_n(&awdlNativeTraceArmed, uint32_t(1), __ATOMIC_RELEASE);
@@ -554,6 +565,11 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         put("host_error",t.hostError); put("firmware_status",t.firmwareStatus);
         put("firmware_media_us",t.mediaUs); put("bluetooth_kills",t.btKill);
         put("rts_failures",t.rtsFailures); put("frame_failures",t.frameFailures);
+        put("peer_window_elapsed_us",t.peerWindowElapsedUs);
+        put("peer_window_remaining_us",t.peerWindowRemainingUs);
+        put("peer_window_counter",t.peerWindowCounter);
+        put("peer_window_channel",t.peerWindowChannel);
+        put("local_window_remaining_us",t.localWindowRemainingUs);
         put("dma_probe_supported",t.dmaProbeSupported); put("dma_probe_samples",t.dmaProbeSamples);
         put("dma_pending_max",t.dmaPendingMax); put("dma_scan_truncated",t.dmaScanTruncated);
         put("dma_reply_seen",t.dmaReplyHostUs!=0);

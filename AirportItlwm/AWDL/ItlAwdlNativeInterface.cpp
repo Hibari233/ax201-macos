@@ -795,6 +795,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
         uint64_t nextClockHostUs;
         bool timelineReady, sentWindow; uint16_t lastWindow;
+        uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
+        ItlAwdl::PeerTxWindow lastPeerWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
     call.out = out; call.generation = -1; call.tx = tx;
@@ -855,6 +857,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 c->tx->min_rate_mbps = o->minimumRateMbps; c->tx->limit = 4;
             }
             out->attempted = 1;
+            o->removeProperty("AX201NativePeerWindow");
             auto result = r->awdlBegin(o, &begin);
             if (c->tx) c->nextClockHostUs=r->awdlObserveNativeTxDma()+20000;
             if (result) { out->last_error = result; c->finished = true; }
@@ -886,6 +889,11 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             if (result) { out->last_error = result; c->finished = true; return kIOReturnSuccess; }
             ++out->samples;
             if (clock.flags & 4) ++out->rx_clock_valid;
+            ItlAwdl::PeerTxWindow peerWindow = {};
+            const auto peerResult = ItlAwdl::qualifyPeerWindow(s.schedule, clock.gp2_us,
+                clock.host_end_us, uint8_t(s.channel), (clock.flags & 7) == 7, &peerWindow);
+            ++c->peerWindows[unsigned(peerResult)];
+            if (peerWindow.remainingUs) c->lastPeerWindow = peerWindow;
             if ((clock.flags & 3) == 3) {
                 ++out->clock_valid;
                 if (!c->timelineReady)
@@ -899,6 +907,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                     &boundary,uint16_t(s.tx.submitted));
                 if (!length) { out->last_error = kIOReturnError; c->finished = true; }
                 else { ++out->encoded; out->encoded_length = uint32_t(length); }
+                const bool overlap = peerResult == ItlAwdl::PeerWindowResult::Ready &&
+                    boundary.remainingUs > 12000 &&
+                    o->channelSequence.plan().channels[boundary.slot] == s.channel;
+                if (overlap) ++c->overlapWindows;
                 if (c->tx && length) {
                     // Bound a qualification to four PSFs and one pending TX.
                     // Transmit only inside a selected-channel EAW, with time
@@ -910,8 +922,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                     } else if (r->awdlNativeTimingInvalid || r->awdlNativeMaxCompletionUs > 5000) {
                         out->last_error = kIOReturnTimeout; c->finished = true;
                     } else if (s.tx.submitted < 4 && !s.tx.pending &&
-                        (!c->sentWindow || window != c->lastWindow) && boundary.remainingUs > 12000 &&
-                        o->channelSequence.plan().channels[boundary.slot] == s.channel) {
+                        (!c->sentWindow || window != c->lastWindow) && overlap) {
                         auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us);
                         if (!sent) {
                             if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
@@ -957,6 +968,24 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         out->radio_stopped = s.session == ItlAwdlIdle && !r->awdlNativeRadioOwner && !s.owner &&
             ic->ic_opmode == IEEE80211_M_STA && !(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING));
         if (o && !o->resourcesDisposed) {
+            auto windows = OSDictionary::withCapacity(12);
+            if (windows) {
+                auto put = [&](const char *key, uint32_t value) {
+                    auto number = OSNumber::withNumber(value, 32);
+                    if (number) { windows->setObject(key, number); number->release(); }
+                };
+                const char *names[] = {"clock_unqualified", "schedule_unavailable",
+                    "other_channel", "edge", "ready"};
+                static_assert(nitems(names) == unsigned(ItlAwdl::PeerWindowResult::Count), "window results");
+                for (unsigned i = 0; i < nitems(names); ++i) put(names[i], c->peerWindows[i]);
+                put("samples", out->samples); put("local_overlap", c->overlapWindows);
+                put("selected_channel", out->channel);
+                put("last_peer_channel", c->lastPeerWindow.channel);
+                put("last_peer_counter", c->lastPeerWindow.counter);
+                put("last_peer_elapsed_us", c->lastPeerWindow.elapsedUs);
+                put("last_peer_remaining_us", c->lastPeerWindow.remainingUs);
+                o->setProperty("AX201NativePeerWindow", windows); windows->release();
+            }
             out->backend_after = o->backendCalls; out->creation_after = o->peerCreationCalls;
             out->interface_enabled = o->isInterfaceEnabled();
             out->tx_enabled = o->transportTx && o->transportTx->isEnabled();
