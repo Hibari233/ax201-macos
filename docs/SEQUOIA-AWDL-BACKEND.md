@@ -56,13 +56,13 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 56 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 54 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Seven implemented methods instead receive fully sized audited structures:
+bytes. Nine implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
 the native 16-bit value. Master-channel set/get stage a channel from the radio's
-active map. Invalid updates preserve staged state. Full initialization must open
+active map; election-RSSI set/get normalize four signed bytes. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -265,6 +265,21 @@ exercise zero, unset readback, valid selection, malformed updates and channel
 mismatch rejection. Staging does not retune the radio. Operational enable and
 each future transmit schedule must independently revalidate firmware regulatory
 flags and timing before any frame is submitted.
+
+Election-RSSI requests in 24H32 are **20 bytes**, including a fourth word at
+byte 16 that was absent from the inherited declaration. This extent is checked
+by both native ioctl wrappers; native configuration writes the fourth word.
+The Sequoia-only declaration and compile fixture now cover it explicitly.
+The radio setter takes each word's low byte, and the getter sign-extends it.
+The disabled backend follows that normalization for all four values and owns
+a copy. The peer manager resolves its sentinel before calling the backend;
+the backend does not invent another sentinel or clamp the signal values.
+
+Version 0/1 requests require staged network identifiers and a disabled
+interface. Unset readback leaves the output unchanged, invalid versions leave
+all four old values unchanged, and runtime contracts exercise signed endpoints,
+upper-bit truncation, zero and producer-independent readback. No firmware
+selection algorithm is enabled by accepting these parameters.
 
 ## Native packet prototype
 

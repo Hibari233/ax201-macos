@@ -179,6 +179,44 @@ IOReturn ItlAwdlNativeInterface::getAWDL_MASTER_CHANNEL(apple80211_awdl_master_c
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_ELECTION_RSSI_THRESHOLDS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 20, "24H32 election-RSSI request");
+    const uint32_t words[] = {data->unk1, data->unk2, data->unk3, data->unk4};
+    // The native radio stores low bytes; its getter sign-extends each byte.
+    // Sentinel handling belongs to the peer manager before this backend call.
+    for (unsigned i = 0; i < 4; ++i) {
+        const int32_t low = words[i] & 0xff;
+        electionRssiThresholds[i] = low < 0x80 ? low : low - 0x100;
+    }
+    electionRssiThresholdsValid = true;
+    // These are owned disabled-state parameters. Operational enable remains
+    // unavailable until the radio scheduler can apply the whole configuration.
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_ELECTION_RSSI_THRESHOLDS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !electionRssiThresholdsValid) return finish(kIOReturnNotReady);
+    data->version = 1;
+    data->unk1 = static_cast<uint32_t>(electionRssiThresholds[0]);
+    data->unk2 = static_cast<uint32_t>(electionRssiThresholds[1]);
+    data->unk3 = static_cast<uint32_t>(electionRssiThresholds[2]);
+    data->unk4 = static_cast<uint32_t>(electionRssiThresholds[3]);
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -711,6 +749,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     electionIdValid = false;
     masterChannel = 0;
     masterChannelValid = false;
+    bzero(electionRssiThresholds, sizeof(electionRssiThresholds));
+    electionRssiThresholdsValid = false;
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -751,6 +791,8 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     masterChannel = 0;
     masterChannelValid = false;
     removeProperty("AX201StagedMasterChannel");
+    bzero(electionRssiThresholds, sizeof(electionRssiThresholds));
+    electionRssiThresholdsValid = false;
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -1066,6 +1108,33 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         master.version != 1 || master.master_channel != 6;
     if (masterFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_ELECTION_RSSI_THRESHOLDS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_election_rssi_thresholds thresholds;
+    memset(&thresholds, 0xa5, sizeof(thresholds));
+    auto untouchedThresholds = thresholds;
+    ++out->methods_checked;
+    if (object->getAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnNotReady ||
+        memcmp(&thresholds, &untouchedThresholds, sizeof(thresholds))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_ELECTION_RSSI_THRESHOLDS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    thresholds = {0, 0x12345680, 0x7f, 0xffffffff, 0x100};
+    bool rssiFailed = object->setAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnSuccess;
+    memset(&thresholds, 0xa5, sizeof(thresholds));
+    rssiFailed |= object->getAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnSuccess ||
+        thresholds.version != 1 || thresholds.unk1 != 0xffffff80 ||
+        thresholds.unk2 != 0x7f || thresholds.unk3 != 0xffffffff || thresholds.unk4 != 0;
+    auto preservedThresholds = thresholds;
+    thresholds = {2, 0, 0, 0, 0};
+    rssiFailed |= object->setAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnBadArgument;
+    rssiFailed |= object->getAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnSuccess ||
+        memcmp(&thresholds, &preservedThresholds, sizeof(thresholds));
+    thresholds = {1, 0, 0, 0, 0xffffffbf};
+    rssiFailed |= object->setAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnSuccess;
+    rssiFailed |= object->getAWDL_ELECTION_RSSI_THRESHOLDS(&thresholds) != kIOReturnSuccess ||
+        thresholds.unk1 || thresholds.unk2 || thresholds.unk3 || thresholds.unk4 != 0xffffffbf;
+    if (rssiFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     uint8_t payload[] = {21, 2, 0, 0x10, 1};
     apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
@@ -1116,6 +1185,8 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     concrete->masterChannel = 0;
     concrete->masterChannelValid = false;
     concrete->removeProperty("AX201StagedMasterChannel");
+    bzero(concrete->electionRssiThresholds, sizeof(concrete->electionRssiThresholds));
+    concrete->electionRssiThresholdsValid = false;
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

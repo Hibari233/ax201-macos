@@ -84,6 +84,8 @@ private:
     bool electionIdValid;
     uint16_t masterChannel;
     bool masterChannelValid;
+    int32_t electionRssiThresholds[4];
+    bool electionRssiThresholdsValid;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;

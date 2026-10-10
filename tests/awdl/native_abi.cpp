@@ -55,6 +55,8 @@ static_assert(sizeof(apple80211_awdl_bssid) == 16, "Sequoia BSSID pair length");
 static_assert(sizeof(apple80211_awdl_election_id) == 8, "Sequoia election-ID length");
 static_assert(sizeof(apple80211_awdl_master_channel) == 8, "Sequoia master-channel length");
 static_assert(__offsetof(apple80211_awdl_master_channel, master_channel) == 4, "Sequoia master-channel offset");
+static_assert(sizeof(apple80211_awdl_election_rssi_thresholds) == 20, "Sequoia election-RSSI length");
+static_assert(__offsetof(apple80211_awdl_election_rssi_thresholds, unk4) == 16, "Sequoia fourth RSSI threshold");
 static_assert(__offsetof(apple80211_awdl_election_id, election_id) == 4, "Sequoia election-ID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");

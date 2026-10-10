@@ -652,3 +652,32 @@ health assertions passed after the checks. Election-ID acceptance is disabled
 configuration only: no master was elected, no RF synchronization or native
 packet handoff occurred, and no discovery or file transfer was tested.
 Subsequent master-channel changes require separate hardware qualification.
+
+## Native master channel accepted — 2026-10-10
+
+Source `0e6879aec2751fb5ba7505e0006030fb89e17b37` (revision 26):
+
+- Binary SHA-256: `1cf70fc49a0d60aa9824d6a5be9b4cdd5aba66d873e04f80defddc0e1f527ef4`
+- Loaded UUID: `688D1E93-A7B5-3F9C-9B2B-0C29C06BBE9E`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38048569436)
+  passed all three jobs; the compiled interface matched 560 slots / 63 methods.
+  The EFI transaction verified its revision 25 rollback and unchanged config.
+
+All 384 init-only contracts passed with no failures or remaining instances,
+including channel-zero no-op, selected-channel readback, malformed updates and
+sync-encoder rejection of a mismatched master channel. Eight malformed init
+requests, seven malformed configure requests and the missing-session rejection
+passed.
+
+The single retained native configuration selected **channel 6**, confirmed by
+the staged registry property. Its six-call trace shows successful BSSID,
+election-ID and master-channel setters. Native configuration then stopped at
+`setAWDL_ELECTION_RSSI_THRESHOLDS`, which returned unsupported. Cache-size and
+election-metric unsupported results remained nonfatal on this path. Two repeated
+runs returned the saved trace and identity without further backend calls.
+
+The native interface and queues stayed disabled and unpublished. WPA2 router
+pings passed 12/12 and before/after GPU/display/power assertions passed. No
+radio retune, RF synchronization, native packet handoff, discovery or transfer
+occurred. The subsequent 20-byte RSSI request correction has not been tested
+by this revision's result.

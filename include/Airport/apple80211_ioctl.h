@@ -1000,6 +1000,11 @@ struct apple80211_awdl_election_rssi_thresholds {
     uint32_t    unk1;
     uint32_t    unk2;
     uint32_t    unk3;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 validates a 20-byte ioctl and accesses a fourth threshold at 16.
+    // Each request word is normalized to its signed low byte by the radio.
+    uint32_t    unk4;
+#endif
 } __attribute__((packed));
 
 struct apple80211_channel_sequence {
