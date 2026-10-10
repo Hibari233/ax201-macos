@@ -49,6 +49,11 @@ static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullp
                         nullptr, nullptr, 0, nullptr, nullptr, 0)), IOReturn),
                         "Sequoia registration returns zero-success IOReturn, not bool");
 
+static_assert(__is_same(decltype(static_cast<IOSkywalkNetworkInterface *>(nullptr)->deferBSDAttach(true)),
+                        IOReturn), "Sequoia deferred BSD attach returns IOReturn");
+static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullptr)->deregisterEthernetInterface(0)),
+                        IOReturn), "Sequoia deregistration returns IOReturn");
+
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)
 public:

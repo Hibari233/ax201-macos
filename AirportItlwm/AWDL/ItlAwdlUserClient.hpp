@@ -38,5 +38,6 @@ private:
     static IOReturn nativeStart(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeSession(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativePackets(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeTransport(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeQueues(OSObject *, void *, IOExternalMethodArguments *);
 };

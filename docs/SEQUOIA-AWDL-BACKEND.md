@@ -257,6 +257,34 @@ channel/ring or BSD interface is attached, and nothing reaches firmware.
 Runtime qualification is recorded separately; passing these checks is not
 evidence of packet delivery, peer discovery or AirDrop transfer.
 
+## Retained queue registration prototype
+
+Selector 24 and capability bit 16384 register the disabled TX/RX queue pair
+with the existing retained AWDL object. A session must already exist; this
+operation never starts another peer manager. The new `awdl_native_transport`
+client supports `status`, `prepare STOP_AFTER`, `clear` and `selftest`.
+`prepare 0` retains one pool, two work sources, and the native logical-link /
+queue-set registration across client closes. Repeating it is idempotent.
+Stages 1–6 deliberately clean up after pool creation, TX creation, RX creation,
+TX source addition, RX source addition, and registration respectively.
+
+The interface supplies an `awdl` BSD prefix and checks both native registration
+copies and each queue's interface association. The registration remains
+**unpublished**: BSD attachment is deferred, no service is published, no native
+ring is initialized, and neither queue is enabled. Metadata keeps native defaults
+for flags not yet qualified for BSD use. It is not a usable `awdl0` or AirDrop.
+The callbacks live with the retained object and return zero; any invocation
+is a diagnostic failure, not a successful radio operation.
+
+Registration checks queues into the pool and retains the pool for both directions.
+Cleanup calls the audited `deregisterEthernetInterface(0)` first, which checks
+queues out and clears queue-set associations before releasing the native copies.
+It then removes work sources and releases owned queues/pool. This ordering is
+also used before retiring the retained interface. Clearing refuses an attached
+BSD interface; live BSD shutdown and its reporting/lock ordering require further
+implementation. Native `deferBSDAttach(bool)` returns `IOReturn`, corrected here
+without changing its virtual slot. Runtime results belong in `VALIDATION.md`.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`

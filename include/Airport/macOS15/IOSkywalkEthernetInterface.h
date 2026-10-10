@@ -60,6 +60,7 @@ public:
     bool initRegistrationInfo(RegistrationInfo *, unsigned int, unsigned long);
     // 24H32 returns a full IOReturn: zero is success, not a false boolean.
     IOReturn registerEthernetInterface(const RegistrationInfo *, IOSkywalkPacketQueue **, unsigned int, IOSkywalkPacketBufferPool *, IOSkywalkPacketBufferPool *, unsigned int);
+    IOReturn deregisterEthernetInterface(unsigned int);
     struct ExpansionData { RegistrationInfo *fRegistrationInfo; ifnet_t fBSDInterface; };
     uint8_t _layout0[0x38];
     ExpansionData *mExpansionData2;

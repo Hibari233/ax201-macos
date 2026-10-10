@@ -6,9 +6,15 @@
 
 class AirportItlwm;
 class ItlIwx;
+class ItlAwdlNativePacketPool;
+class ItlAwdlNativeTxQueue;
+class ItlAwdlNativeRxQueue;
+class IOSkywalkPacket;
+class IOSkywalkTxSubmissionQueue;
+class IOSkywalkRxCompletionQueue;
 
-// Bounded native integration probes under the radio gate. No registration,
-// firmware command, channel change, link enable or AirDrop capability claim.
+// Native integration under the radio gate, including retained, unpublished
+// queue registration. No firmware command, link enable or AirDrop claim.
 class ItlAwdlNativeInterface : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(ItlAwdlNativeInterface)
 public:
@@ -23,12 +29,15 @@ public:
         const ItlAwdlNativePacketRequest *, ItlAwdlNativePacketResponse *);
     static IOReturn probeQueues(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeQueueRequest *, ItlAwdlNativeQueueResponse *);
+    static IOReturn managedTransport(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeTransportRequest *, ItlAwdlNativeTransportResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
     void *createPeerManager() override;
     IO80211Controller *getController() override { return controller; }
     ether_addr getSelfMacAddr() override { return selfAddress; }
+    const char *getBSDNamePrefix() override { return "awdl"; }
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \
@@ -49,6 +58,20 @@ private:
     uint32_t peerCreationCalls;
     uint32_t partialCleanups;
     ether_addr selfAddress;
+    ItlAwdlNativePacketPool *transportPool;
+    ItlAwdlNativeTxQueue *transportTx;
+    ItlAwdlNativeRxQueue *transportRx;
+    IOWorkLoop *transportLoop;
+    bool transportTxAdded, transportRxAdded, transportRegistrationAttempted, transportRegistered;
+    uint32_t transportPrepares, transportRegisters, transportDeregisters, transportCallbacks;
+    uint32_t transportCleanupErrors, transportLastStage;
+    IOReturn prepareTransport(IOWorkLoop *, uint32_t);
+    IOReturn clearTransport();
+    void describeTransport(ItlAwdlNativeTransportResponse *);
+    static unsigned int transportDequeue(OSObject *, IOSkywalkTxSubmissionQueue *,
+        IOSkywalkPacket *const *, unsigned int, void *);
+    static unsigned int transportEnqueue(OSObject *, IOSkywalkRxCompletionQueue *,
+        IOSkywalkPacket **, unsigned int, void *);
     bool initializeForProbe(IO80211Controller *, ether_addr *, uint32_t,
         ItlAwdlNativeInitResponse *);
     void disposeInitializedResources();

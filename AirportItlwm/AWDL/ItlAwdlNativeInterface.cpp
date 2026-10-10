@@ -42,6 +42,205 @@ const OSMetaClass *nativePeerClass() {
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
+// These callbacks remain attached to the retained object's lifetime, never a
+// user-client stack frame. Native rings are not initialized or enabled yet.
+unsigned int ItlAwdlNativeInterface::transportDequeue(OSObject *owner,
+    IOSkywalkTxSubmissionQueue *, IOSkywalkPacket *const *, unsigned int, void *) {
+    ++static_cast<ItlAwdlNativeInterface *>(owner)->transportCallbacks;
+    return 0;
+}
+unsigned int ItlAwdlNativeInterface::transportEnqueue(OSObject *owner,
+    IOSkywalkRxCompletionQueue *, IOSkywalkPacket **, unsigned int, void *) {
+    ++static_cast<ItlAwdlNativeInterface *>(owner)->transportCallbacks;
+    return 0;
+}
+
+IOReturn ItlAwdlNativeInterface::clearTransport() {
+    // Deregistration alone does not detach a live BSD client. This boundary is
+    // only qualified before publication; never free beneath an attached ifnet.
+    if (getBSDInterface()) return kIOReturnBusy;
+    if (transportRx) transportRx->disable();
+    if (transportTx) transportTx->disable();
+    if (transportRegistrationAttempted) {
+        auto result = deregisterEthernetInterface(0);
+        if (result) { ++transportCleanupErrors; return result; }
+        if (transportRegistered) ++transportDeregisters;
+        transportRegistered = transportRegistrationAttempted = false;
+        if (mExpansionData->fRegistrationInfo || mExpansionData2->fRegistrationInfo ||
+            (transportTx && transportTx->getInterface()) || (transportRx && transportRx->getInterface())) {
+            ++transportCleanupErrors;
+            return kIOReturnError;
+        }
+    }
+    if (transportRxAdded) {
+        auto result = transportLoop->removeEventSource(transportRx);
+        if (result) { ++transportCleanupErrors; return result; }
+        transportRxAdded = false;
+    }
+    if (transportTxAdded) {
+        auto result = transportLoop->removeEventSource(transportTx);
+        if (result) { ++transportCleanupErrors; return result; }
+        transportTxAdded = false;
+    }
+    // LogicalLink::setInterface(nullptr) checks both queues out of the pool.
+    // QueueSet::free clears their weak QueueSet pointers before releasing them.
+    // No initialize(nullptr) here: a future BSD client must supply real rings.
+    OSSafeReleaseNULL(transportRx);
+    OSSafeReleaseNULL(transportTx);
+    OSSafeReleaseNULL(transportPool);
+    OSSafeReleaseNULL(transportLoop);
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlAwdlNativeInterface::prepareTransport(IOWorkLoop *loop, uint32_t stopAfter) {
+    if (transportRegistered) return stopAfter ? kIOReturnBusy : kIOReturnSuccess;
+    if (!loop || getBSDInterface()) return kIOReturnNotReady;
+    if (transportPool || transportTx || transportRx || transportLoop ||
+        mExpansionData->fRegistrationInfo || mExpansionData2->fRegistrationInfo ||
+        ItlAwdlNativePacketPool::metaClass->getInstanceCount() ||
+        ItlAwdlNativePacket::metaClass->getInstanceCount() ||
+        ItlAwdlNativeTxQueue::metaClass->getInstanceCount() ||
+        ItlAwdlNativeRxQueue::metaClass->getInstanceCount()) return kIOReturnBusy;
+    auto result = deferBSDAttach(true);
+    if (result) return result;
+    ++transportPrepares;
+    transportLastStage = 0;
+    transportLoop = loop;
+    loop->retain();
+    do {
+        result = kIOReturnNoMemory;
+        transportPool = ItlAwdlNativePacketPool::withOwner(this);
+        if (!transportPool) break;
+        transportLastStage = 1;
+        if (stopAfter == 1) { result = kIOReturnSuccess; break; }
+        transportTx = ItlAwdlNativeTxQueue::withPool(transportPool, this, transportDequeue, nullptr);
+        if (!transportTx) break;
+        transportLastStage = 2;
+        if (stopAfter == 2) { result = kIOReturnSuccess; break; }
+        transportRx = ItlAwdlNativeRxQueue::withPool(transportPool, this, transportEnqueue, nullptr);
+        if (!transportRx) break;
+        transportLastStage = 3;
+        if (stopAfter == 3) { result = kIOReturnSuccess; break; }
+        result = loop->addEventSource(transportTx);
+        if (result) break;
+        transportTxAdded = true;
+        transportLastStage = 4;
+        if (stopAfter == 4) break;
+        result = loop->addEventSource(transportRx);
+        if (result) break;
+        transportRxAdded = true;
+        transportLastStage = 5;
+        if (stopAfter == 5) break;
+        IOSkywalkEthernetInterface::RegistrationInfo info = {};
+        if (!initRegistrationInfo(&info, 1, sizeof(info))) { result = kIOReturnError; break; }
+        // Exact 24H32 registration offsets. Keep generic native defaults for
+        // unaudited flags; this unpublished registration is not a BSD contract.
+        const uint32_t subfamily = 3, unit = 0, mtu = 1428;
+        const char *prefix = getBSDNamePrefix();
+        memcpy(info.bytes + 0xc, &subfamily, sizeof(subfamily));
+        memcpy(info.bytes + 0x30, &prefix, sizeof(prefix));
+        memcpy(info.bytes + 0x38, &unit, sizeof(unit));
+        memcpy(info.bytes + 0x48, &mtu, sizeof(mtu));
+        memcpy(info.bytes + 0x4c, &mtu, sizeof(mtu));
+        memcpy(info.bytes + 0x108, &selfAddress, sizeof(selfAddress));
+        IOSkywalkPacketQueue *queues[] = {transportTx, transportRx};
+        transportRegistrationAttempted = true; // Includes partial native failure.
+        result = registerEthernetInterface(&info, queues, 2, transportPool, transportPool, 0);
+        if (result) break;
+        transportRegistered = true;
+        ++transportRegisters;
+        transportLastStage = 6;
+        if (!mExpansionData->fRegistrationInfo || !mExpansionData2->fRegistrationInfo ||
+            memcmp(info.bytes, mExpansionData->fRegistrationInfo->bytes, 0x108) ||
+            memcmp(info.bytes, mExpansionData2->fRegistrationInfo->bytes, sizeof(info)) ||
+            transportTx->getInterface() != this || transportRx->getInterface() != this ||
+            transportTx->isEnabled() || transportRx->isEnabled() || getBSDInterface() ||
+            getBSDUnitNumber() != 0 || strcmp(getBSDNamePrefix(), "awdl")) {
+            result = kIOReturnError; break;
+        }
+        if (!stopAfter) return kIOReturnSuccess;
+    } while (false);
+    const auto cleaned = clearTransport();
+    return result ? result : cleaned;
+}
+
+void ItlAwdlNativeInterface::describeTransport(ItlAwdlNativeTransportResponse *out) {
+    out->registered = transportRegistered;
+    out->last_stage = transportLastStage;
+    out->prepare_calls = transportPrepares;
+    out->registrations = transportRegisters;
+    out->deregistrations = transportDeregisters;
+    out->callback_calls = transportCallbacks;
+    out->cleanup_errors = transportCleanupErrors;
+    out->tx_interface = transportTx && transportTx->getInterface() == this;
+    out->rx_interface = transportRx && transportRx->getInterface() == this;
+    out->tx_enabled = transportTx && transportTx->isEnabled();
+    out->rx_enabled = transportRx && transportRx->isEnabled();
+    out->bsd_interfaces = getBSDInterface() != nullptr;
+    out->registration_copies = (mExpansionData->fRegistrationInfo != nullptr) +
+        (mExpansionData2->fRegistrationInfo != nullptr);
+    out->registry_id = getRegistryEntryID();
+}
+
+IOReturn ItlAwdlNativeInterface::managedTransport(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeTransportRequest *request, ItlAwdlNativeTransportResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlTransportClear || request->stop_after > 6 || request->reserved ||
+        (request->operation != ItlAwdlTransportPrepare && request->stop_after)) return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    auto resources = IOService::getResourceService();
+    if (!gate || !gate->getWorkLoop() || !resources || !resources->getProperty("IOBSD"))
+        return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; IOWorkLoop *loop;
+        const ItlAwdlNativeTransportRequest *request; ItlAwdlNativeTransportResponse *out; } call = {
+            parent, radio, gate->getWorkLoop(), request, out};
+    auto result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        if (c->parent->isInactive()) return kIOReturnNotReady;
+        ItlAwdlStatusResponse status = {};
+        auto result = c->radio->awdlCommand(c->parent, ItlAwdlStatus, nullptr, &status);
+        if (result) return result;
+        if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle) return kIOReturnBusy;
+        auto object = c->parent->nativeAwdlInterface;
+        if (!object) return c->request->operation == ItlAwdlTransportInspect ?
+            kIOReturnSuccess : kIOReturnNotReady;
+        if (c->parent->getAwdlInterface() != object) return kIOReturnError;
+        if (c->request->operation == ItlAwdlTransportPrepare)
+            result = object->prepareTransport(c->loop, c->request->stop_after);
+        else if (c->request->operation == ItlAwdlTransportClear)
+            result = object->clearTransport();
+        object->describeTransport(c->out);
+        c->out->last_error = static_cast<uint32_t>(result);
+        return kIOReturnSuccess;
+    }, &call);
+    if (result) return result;
+    // Only wait after a mutation that released resources. Do not hold the gate
+    // needed by the native deferred reference cleanup during this bounded wait.
+    if (!out->registered && request->operation != ItlAwdlTransportInspect) {
+        unsigned waited = 0;
+        while ((ItlAwdlNativePacketPool::metaClass->getInstanceCount() ||
+            ItlAwdlNativePacket::metaClass->getInstanceCount() ||
+            ItlAwdlNativeTxQueue::metaClass->getInstanceCount() ||
+            ItlAwdlNativeRxQueue::metaClass->getInstanceCount()) && waited++ < 250) IOSleep(1);
+    }
+    out->interface_count = metaClass->getInstanceCount();
+    auto peerClass = nativePeerClass();
+    out->peer_count = peerClass ? peerClass->getInstanceCount() : 0;
+    out->pool_count = ItlAwdlNativePacketPool::metaClass->getInstanceCount();
+    out->packet_count = ItlAwdlNativePacket::metaClass->getInstanceCount();
+    out->tx_count = ItlAwdlNativeTxQueue::metaClass->getInstanceCount();
+    out->rx_count = ItlAwdlNativeRxQueue::metaClass->getInstanceCount();
+    if (!out->registered && request->operation != ItlAwdlTransportInspect && !out->last_error &&
+        (out->pool_count || out->packet_count || out->tx_count || out->rx_count)) out->last_error = kIOReturnTimeout;
+    return kIOReturnSuccess;
+}
+
 IOReturn ItlAwdlNativeInterface::probeQueues(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeQueueRequest *request, ItlAwdlNativeQueueResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -145,6 +344,13 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
     backendCalls = peerCreationCalls = partialCleanups = 0;
+    transportPool = nullptr;
+    transportTx = nullptr;
+    transportRx = nullptr;
+    transportLoop = nullptr;
+    transportTxAdded = transportRxAdded = transportRegistrationAttempted = transportRegistered = false;
+    transportPrepares = transportRegisters = transportDeregisters = transportCallbacks = 0;
+    transportCleanupErrors = transportLastStage = 0;
     selfAddress = *address;
     controller = parent;
     controller->retain();
@@ -206,6 +412,9 @@ void *ItlAwdlNativeInterface::createPeerManager() {
 
 void ItlAwdlNativeInterface::stop(IOService *provider) {
     if (!startAttempted) return;
+    // Transport registration belongs to this same once-per-boot peer manager.
+    // Clear its references before native stop destroys the interface resources.
+    if (clearTransport()) IOLog("AX201 native transport: cleanup failed during stop\n");
     startAttempted = false;
     startAllowed = false;
     auto state = nativeStartState();

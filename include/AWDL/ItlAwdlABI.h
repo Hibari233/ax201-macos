@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -140,6 +140,21 @@ struct ItlAwdlNativeQueueResponse {
     uint32_t packets_before, packets_after, tx_before, tx_after;
     uint32_t rx_before, rx_after, cleanup_errors, last_error;
 };
+// Register disabled queues with the retained native object, without publishing
+// a BSD client, enabling a ring, or transmitting. The session must exist first.
+// Prepare is idempotent when registered. stop_after 1..6 is an early cleanup
+// checkpoint (pool, TX, RX, TX source, RX source, registration), not fault injection.
+enum ItlAwdlNativeTransportOperation { ItlAwdlTransportInspect, ItlAwdlTransportPrepare, ItlAwdlTransportClear };
+struct ItlAwdlNativeTransportRequest { uint32_t version, operation, stop_after, reserved; };
+struct ItlAwdlNativeTransportResponse {
+    uint32_t version, registered, last_stage, prepare_calls;
+    uint32_t registrations, deregistrations, callback_calls, cleanup_errors;
+    uint32_t interface_count, peer_count, pool_count, packet_count;
+    uint32_t tx_count, rx_count, tx_interface, rx_interface;
+    uint32_t tx_enabled, rx_enabled, bsd_interfaces, registration_copies;
+    uint32_t last_error, reserved;
+    uint64_t registry_id;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -176,6 +191,9 @@ static_assert(sizeof(ItlAwdlNativeSessionResponse) == 56, "native session respon
 static_assert(ItlAwdlNativePackets == 22, "append-only native packet ABI");
 static_assert(sizeof(ItlAwdlNativePacketRequest) == 16, "native packet request ABI");
 static_assert(sizeof(ItlAwdlNativePacketResponse) == 80, "native packet response ABI");
+static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
+static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
+static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");
 static_assert(ItlAwdlNativeQueues == 23, "append-only native queue ABI");
 static_assert(sizeof(ItlAwdlNativeQueueRequest) == 16, "native queue request ABI");
 static_assert(sizeof(ItlAwdlNativeQueueResponse) == 112, "native queue response ABI");
