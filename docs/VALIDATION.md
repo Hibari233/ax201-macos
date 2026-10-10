@@ -1319,3 +1319,30 @@ harness restored WPA2 (42/42 pings), retained the same manager, and passed
 GPU/display/power checks. An SSH session expired during the trial; a fresh
 connection succeeded and the boot-session UUID was unchanged. No native
 interface, queues or RX handoff were enabled. Native AirDrop remains unavailable.
+
+## Separate listener MAC context — 2026-10-11
+
+Source `5cdf66ec464ebacb2e501e7c71935c6e9efc029d` (revision 48), binary
+`1d45e5adc199ace6e219676d5a04fee6118e50bce180163e3d92db8ee4653e92`, loaded
+UUID `CD0B21F3-2A97-3369-A976-070A6968BD85`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38069197240)
+passed all three jobs. Local UBSan/Python checks, both native ABI comparisons,
+384 runtime initialization contracts and the full baseline passed. Rollback is
+revision 47.
+
+The native TX lease selected MAC1, following the non-MLO allocation rule in
+[Intel's upstream allocator](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/mvm/mac-ctxt.c#L220).
+All 1,166 in-lease identity/active-flag samples matched, and stop restored MAC0.
+The two passive sessions remained on MAC0 and restored normally. This checks
+host configuration and successful command flow, not a firmware context dump.
+
+The unicast still completed in **24,178 us**, with its addressed ACK at
+**22,962 us**. Firmware reported success, 228 us media duration and no retries
+or Bluetooth kills. All 18 pending MAC-status samples were awake. Three decoded
+management frames before ACK delivery had zero Duration values. No software
+NAV deferral was needed. Changing the MAC identity did not resolve the timing
+failure; no second frame was sent.
+
+WPA2 passed 42/42 pings, the retained manager and boot-session UUID were
+unchanged, and GPU/display/power checks passed. The receiving Mac still had no
+transmitter entry in 211 observations. Native AirDrop remains unavailable.
