@@ -88,6 +88,7 @@ struct ItlAwdlNativeInitResponse {
     uint32_t version, attempted, base_initialized, virtual_initialized;
     uint32_t released, live_before, live_after, role;
     uint32_t methods_checked, method_failures, provider_open_after, last_error;
+    uint32_t provider_opened;
 };
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
@@ -114,7 +115,7 @@ struct ItlAwdlRunStatusResponse {
 static_assert(sizeof(ItlAwdlBeginRequest) == 24, "AWDL request ABI");
 static_assert(sizeof(ItlAwdlDataProbeRequest) == 16, "AWDL fixed echo request ABI");
 static_assert(sizeof(ItlAwdlNativeInitRequest) == 16, "native init request ABI");
-static_assert(sizeof(ItlAwdlNativeInitResponse) == 48, "native init response ABI");
+static_assert(sizeof(ItlAwdlNativeInitResponse) == 52, "native init response ABI");
 static_assert(ItlAwdlDataProbe == 18 && ItlAwdlNativeInit == 19, "append-only native init ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");

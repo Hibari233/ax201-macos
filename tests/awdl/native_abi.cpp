@@ -13,6 +13,8 @@ static_assert(sizeof(apple80211_awdl_sync_enabled) == 12, "Sequoia sync enable e
 static_assert(__offsetof(apple80211_awdl_sync_enabled, enabled) == 8, "Sequoia sync enabled field");
 static_assert(sizeof(apple80211_awdl_sync_frame_template) == 16, "Sequoia frame template extent");
 static_assert(__offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "Sequoia template pointer");
+static_assert(__is_same(decltype(static_cast<IO80211SkywalkInterface *>(nullptr)->getSelfMacAddr()),
+                        ether_addr), "Sequoia self MAC returns by value");
 
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)

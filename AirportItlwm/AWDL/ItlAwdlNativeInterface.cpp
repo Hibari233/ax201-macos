@@ -9,6 +9,7 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {
     virtualInitAttempted = false;
     resourcesDisposed = false;
+    selfAddress = *address;
     controller = parent;
     controller->retain();
     if (!IO80211SkywalkInterface::init()) return false;
@@ -18,7 +19,9 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     if (!IO80211VirtualInterface::init(controller, address, 6, "awdl")) return false;
     ++out->virtual_initialized;
     out->role = static_cast<uint32_t>(getInterfaceRole());
-    return out->role == 6;
+    const bool opened = controller->isOpen(this);
+    if (opened) ++out->provider_opened;
+    return out->role == 6 && opened;
 }
 
 void ItlAwdlNativeInterface::disposeInitializedResources() {
@@ -87,6 +90,12 @@ IOReturn ItlAwdlNativeInterface::probeGated(AirportItlwm *parent, ItlIwx *radio,
         ++out->attempted;
         bool initialized = object->initializeForProbe(parent, &address, request->stop_after, out);
         if (initialized && request->stop_after == 0) checkUnsupportedContract(object, out);
+        if (initialized && request->stop_after == 0) {
+            IO80211AWDLProtocol *native = object;
+            const auto returnedAddress = native->getSelfMacAddr();
+            ++out->methods_checked;
+            if (memcmp(&returnedAddress, &address, sizeof(address))) ++out->method_failures;
+        }
         object->disposeInitializedResources();
         if (parent->isOpen(object)) ++out->provider_open_after;
         object->release();

@@ -56,8 +56,15 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase also checks virtual dispatch through all 63 native backend
-methods using null and non-null opaque pointers, plus `setMacAddress`. The
+methods using null and non-null opaque pointers, plus `setMacAddress` and the
+self-address getter. Full initialization must open the controller successfully. The
 unimplemented methods return explicit errors and do not inspect request bytes.
+
+The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
+In 24H32 the getter returns six address bytes in the return register and native
+`createPeerManager()` copies those bytes into an `ether_addr` value. The Sequoia
+declaration now returns by value; the probe implements an in-memory address so
+the getter also works before `start()` creates the native MAC address agent.
 
 This stage deliberately rejects `start()`: no peer manager, BSD `awdl0`, packet
 queues, RF changes, or native AirDrop capability are registered. The compiled

@@ -149,7 +149,9 @@ private: virtual void _abi_0cd0() __asm__("__ZN23IO80211SkywalkInterface8findPee
     virtual void * getWorkerMatchingDict(OSString*);
     virtual bool init(IOService*, ether_addr*);
     virtual bool isInterfaceEnabled();
-    virtual ether_addr * getSelfMacAddr();
+    // 24H32 returns the six address bytes in RAX, not a pointer. Native callers
+    // copy its low 32/16 bits into ether_addr before passing an address onward.
+    virtual ether_addr getSelfMacAddr();
     virtual IOReturn setMacAddress(ether_addr&) = 0;
     virtual void * getPacketPool(OSString*);
     virtual CCLogStream * getLogger() const;

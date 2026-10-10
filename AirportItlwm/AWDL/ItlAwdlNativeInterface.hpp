@@ -18,6 +18,7 @@ public:
     void free() override;
     bool start(IOService *) override { return false; }
     IO80211Controller *getController() override { return controller; }
+    ether_addr getSelfMacAddr() override { return selfAddress; }
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \
@@ -29,6 +30,7 @@ private:
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;
+    ether_addr selfAddress;
     bool initializeForProbe(IO80211Controller *, ether_addr *, uint32_t,
         ItlAwdlNativeInitResponse *);
     void disposeInitializedResources();

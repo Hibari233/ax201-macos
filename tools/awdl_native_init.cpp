@@ -82,15 +82,16 @@ int main(int argc, char **argv) {
     if (result) { fprintf(stderr, "Native init: 0x%x\n", result); return 1; }
     printf("{\"attempted\":%u,\"base_initialized\":%u,\"virtual_initialized\":%u,\"released\":%u,"
            "\"live_before\":%u,\"live_after\":%u,\"role\":%u,\"methods_checked\":%u,"
-           "\"method_failures\":%u,\"provider_open_after\":%u,\"last_error\":%u,\"native_airdrop\":false}\n",
+           "\"method_failures\":%u,\"provider_open_after\":%u,\"last_error\":%u,\"provider_opened\":%u,\"native_airdrop\":false}\n",
            out.attempted, out.base_initialized, out.virtual_initialized, out.released,
            out.live_before, out.live_after, out.role, out.methods_checked,
-           out.method_failures, out.provider_open_after, out.last_error);
+           out.method_failures, out.provider_open_after, out.last_error, out.provider_opened);
     const uint32_t n = request.iterations;
     const bool okay = !out.last_error && out.attempted == n && out.released == n && out.base_initialized == n &&
         out.virtual_initialized == (request.stop_after == 1 ? 0 : n) &&
         out.role == (request.stop_after == 1 ? 0U : 6U) &&
-        out.methods_checked == (request.stop_after == 0 ? 127*n : 0) &&
+        out.methods_checked == (request.stop_after == 0 ? 128*n : 0) &&
+        out.provider_opened == (request.stop_after == 1 ? 0 : n) &&
         !out.live_before && !out.live_after && !out.method_failures && !out.provider_open_after;
     return okay ? 0 : 1;
 }
