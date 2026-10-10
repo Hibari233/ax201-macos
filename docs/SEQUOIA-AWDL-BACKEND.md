@@ -1070,3 +1070,15 @@ fault. Only a valid read supplies its error/data/command fields. These hooks
 add no firmware command or MMIO read and do not change reset, timeout, TX or
 lease policy. A host qualification timeout can occur with `source=0` because
 it is not a driver-reset trigger. Native AirDrop remains unimplemented.
+
+## Periodic series protection profile
+
+Selector 34 uses configuration 2 (P2P discovery) for its four-window series;
+selector 33 retains configuration 3 (management TX). Intel's
+[session-protection API](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/fw/api/time-event.h)
+describes discovery as fragmentable and GO negotiation as non-fragmentable.
+Revision 54's management-profile series asserted near expiry after an empty
+queue, whereas an equal-duration discovery RX lease ended normally. This
+profile change is a controlled comparison, not a proven fix. The current
+generation START requirement, four-frame/one-pending bounds, lease duration,
+packet encoding, rate, clock/window checks and both timing limits are unchanged.

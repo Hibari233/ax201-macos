@@ -1492,3 +1492,40 @@ manager was retained and health checks passed. The original end-of-lease
 reset was not reproduced. Native discovery, RX handoff and AirDrop file
 transfer remain unavailable; reset-cause retention is needed before further
 radio-lifecycle changes can be evaluated reliably.
+
+## Retained firmware fault evidence — 2026-10-11
+
+Source `c465deddf2c82ad5f3839b8cd3ffbabf6970650f` (revision 54), binary
+`485ad65ed0fc74b50d0bf55ebccb62ad156413bd2838fa8098ac9fda7be73c38`, loaded
+UUID `22DCDB90-6938-30FE-BB2D-AE97625C41CE`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38074830946)
+passed all three jobs. Local UBSan/Python checks, both 560-slot/63-method ABI
+comparisons and the 384-contract baseline passed. Rollback is revision 53.
+
+Two listener sessions received 19/20 owned-peer frames; two P2P discovery
+sessions received 17/18. An additional **5-second RX lease** received 32,
+observed a normal firmware END and restored without a reset trigger. All
+three P2P receive leases published zero fault events. This extends the RX
+comparison to the duration used by the TX series; it is not a TX comparison.
+
+The management-profile series again completed all four unicast frames before
+an `EIO` stop. Firmware reported 12 Mbps OFDM, 228 us media time and zero retries
+for every frame; the first completion bound was 23,947 us and subsequent ones
+were under 2 ms. This again separates initial latency from later transmissions,
+but the original 5 ms qualification still fails.
+
+The new snapshot and immediate kernel log agree: a software-error interrupt
+reported **UMAC assertion `0x20003063`**, with secondary LMAC error `0x71`
+(`NMI_INTERRUPT_UMAC_FATAL`). It occurred with 182 us left in the host lease,
+after all four completions: queue head/tail were both 4, queued/pending counts
+and the host TX watchdog were zero. The last recorded UMAC host command was
+`0x00180305` (session protection); no END notification arrived. This identifies
+a firmware assertion near expiry, not its internal invariant or root cause.
+The log contains no static quota command, so a proposed extra monitor-quota
+conflict is not supported by this trace.
+
+WPA2 passed 60/60 pings across all harnesses. The same boot/manager survived,
+radio state restored and health checks passed. The receiving Mac found no
+transmitter entry in 211 observations. Native AirDrop remains unavailable.
+The next isolated comparison uses the fragmentable discovery profile for the
+four-window series while preserving the strict management-TX selector.

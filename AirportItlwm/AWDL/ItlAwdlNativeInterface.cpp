@@ -860,6 +860,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             // native/diagnostic exclusion. It cannot submit diagnostic TX.
             r->awdlNativeRadioOwner = o;
             r->awdlNativeTxQualification = c->tx != nullptr;
+            r->awdlNativeTxSeriesObservation = c->seriesObservation;
             r->awdlNativeP2pQualification = c->p2p;
             r->awdlNativeRateMbps = c->tx ? o->minimumRateMbps : 0;
             bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
@@ -1010,6 +1011,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             r->awdlPublishNativeRadioFault(o);
             r->awdlNativeRadioOwner = nullptr;
             r->awdlNativeTxQualification = false;
+            r->awdlNativeTxSeriesObservation = false;
             r->awdlNativeP2pQualification = false;
             bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
             r->awdlNativeRateMbps = 0;

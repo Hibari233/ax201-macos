@@ -173,6 +173,7 @@ private:
     // cannot set or supply this identity.
     OSObject *awdlNativeRadioOwner = nullptr;
     bool awdlNativeTxQualification = false, awdlNativeP2pQualification = false;
+    bool awdlNativeTxSeriesObservation = false;
     ItlAwdl::P2pSessionProtection awdlNativeP2pSession;
     uint32_t awdlNativeP2pCommandVersion = 0, awdlNativeP2pNotifVersion = 0;
     int awdlStartNativeP2pSession();

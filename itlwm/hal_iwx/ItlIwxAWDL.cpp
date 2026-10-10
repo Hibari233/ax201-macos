@@ -732,7 +732,12 @@ int ItlIwx::awdlStartNativeP2pSession() {
     // Intel maps a management-TX ROC to GO_NEGOTIATION protection, while a
     // normal discovery ROC uses DEVICE_DISCOV. Keep the no-host-TX selector
     // on its qualified configuration; do not accept caller-chosen profiles.
-    const auto config=awdlNativeTxQualification ? ItlAwdl::P2pSessionProtection::ManagementTx :
+    // The four-window observation is periodic discovery, not one management
+    // transaction. Use the fragmentable discovery profile for that lease.
+    // Keep the single-transaction timing selectors on ManagementTx so the
+    // expiry-assert comparison changes only the series selector's profile.
+    const auto config=awdlNativeTxQualification && !awdlNativeTxSeriesObservation ?
+        ItlAwdl::P2pSessionProtection::ManagementTx :
         ItlAwdl::P2pSessionProtection::Discovery;
     if (now>=awdl.deadlineUs || !awdlNativeP2pSession.arm(com.sc_generation,awdl.deadlineUs-now,config))
         return ETIMEDOUT;
