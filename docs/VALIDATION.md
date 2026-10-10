@@ -1036,3 +1036,36 @@ health assertions passed. The same native manager remained disabled and
 unpublished. No native RX delivery, peer discovery or AirDrop transfer occurred.
 Further identical TX trials are deferred while native timing-parameter and
 timeline integration is audited. The 5 ms guard has not been relaxed.
+
+## Native synchronization-parameter round trip — 2026-10-10
+
+Source `ecc251b58ba0b6fd1344d856fcc5b18093f169ea` (revision 40):
+
+- Binary SHA-256: `5c29c1495d82bb3cc50dd2c8d2af6c686cc363c51ff9e01a205cac373d405ac1`
+- Loaded UUID: `A8613A80-8C33-3AA8-82D2-F792CCFE1FFA`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38060537350)
+  passed all three jobs. Twelve local C++ UBSan suites and five Python checks
+  passed; both native ABI comparisons checked 560 slots/63 backend methods
+  with no mismatch. Installation retained a verified revision 39 rollback.
+
+All 384 initialization contracts passed. After the unchanged eleven-call
+configuration, the native timing diagnostic traced exactly three calls: the
+first getter returned `Unsupported` and the native fallback supplied
+`[0,16,16,16,110,0]`; the setter and second getter succeeded, returning
+`[1,16,16,16,110,0]`. These six words are version, AW length, AW period,
+extension, frame period and the opaque tail. This verifies both the fallback
+and the owned backend readback, rather than relying on the native wrapper's
+zero return. Malformed requests and premature template requests were rejected;
+repeated timing runs returned the identical saved result with no extra calls.
+
+Template generation then made the fifteenth backend call, producing the same
+110-byte/four-TLV template and 210-byte CPU encoding. Four stability samples
+retained one unpublished, disabled manager. Two three-second passive RF runs
+produced 132 and 133 coherent clock/encoding samples and heard 16 and 18
+owned-peer actions. No invalid frame was counted; diagnostic-ring drops were
+0 and 2. No native RX handoff or radio transmission occurred.
+
+WPA2 restoration passed (33/33 router pings), as did before/after GPU, display
+and power assertions. No new TX trial was run: the staged values equal the
+previous constants and do not address the failed completion timing. Native
+AirDrop discovery and file transfers remain unverified and unavailable.
