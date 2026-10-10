@@ -1641,3 +1641,30 @@ verified Wi-Fi SSH host key. Its Ethernet route to the controller had an
 incomplete ARP entry; an outbound Ethernet ping resolved it and restored that
 path. This was a management-network interruption, not an observed panic or
 firmware reset. Native AirDrop remains unavailable.
+
+## Broadcast discovery comparison — 2026-10-11
+
+Source `cdc8e5de0369317cb7d039b4a9e646bfca0b456b` (revision 59), binary
+`76585616be291a10dbb2bf2c3deee0fdd14eb54079ef983a78674552b43257cb`, loaded
+UUID `CDB66F78-E6F2-37E4-8942-CFB7764F0BAC`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38079392347)
+passed all three jobs. Local UBSan/Python checks, both ABI comparisons and the
+384-contract baseline passed. Rollback is revision 58.
+
+The new selector sent four broadcast PSFs through the same discovery-profile
+P2P session. All completed successfully, with no failed/pending/aborted frames,
+invalid timing samples or firmware-fault events. Broadcast success does not
+establish receiver acknowledgement or RF receipt. The first encoded-clock to
+completion bound was 24,345 us; subsequent fresh-clock bounds were 1,457, 1,427
+and 1,392 us. Original 5 ms timing qualification still failed.
+
+The receiving Mac had no transmitter entry in 212 observations, with its own
+entry present throughout. Its interface-wide receive counters increased by
+391 input/processed action frames, without invalid/drop-counter increases;
+these counts cannot identify the four test frames. Both independent observers
+covered the entire radio lease. Changing addressed MIF to broadcast PSF did
+not establish discovery in this trial.
+
+The radio stopped normally, the retained manager was unchanged, WPA2 passed
+33/33 baseline/TX pings and GPU/display/power checks passed. Native activation,
+RX handoff, IPv6 packet transport and actual AirDrop transfers remain unfinished.
