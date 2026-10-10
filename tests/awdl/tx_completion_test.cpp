@@ -9,6 +9,37 @@
 using namespace ItlAwdl;
 
 int main() {
+    const uint8_t native[6] = {2,1,2,3,4,5};
+    uint8_t cts[10] = {0xc4,0,0x40,0x1f,2,6,7,8,9,10}; // 8000 us
+    ObservedReservation nav;
+    assert(!nav.remaining(100,1000));
+    for (size_t n=0;n<10;++n) assert(!nav.observe(cts,n,100,1000,native));
+    assert(nav.observe(cts,10,100,1000,native));
+    assert(nav.remaining(100,1000)==8000 && nav.remaining(8000,2000)==100);
+    assert(!nav.remaining(8100,2000) && !nav.remaining(8101,2000));
+    assert(!nav.remaining(100,999) && !nav.remaining(100,101001));
+    cts[2]=1; cts[3]=0;
+    assert(nav.observe(cts,10,200,1100,native)); // Never shorten a longer observed reservation.
+    assert(nav.remaining(300,1200)==7800);
+    cts[2]=0; assert(!nav.observe(cts,10,300,1200,native));
+    cts[2]=0xff; cts[3]=0xc0; assert(!nav.observe(cts,10,300,1200,native));
+    cts[3]=0x7f; assert(nav.observe(cts,10,300,1200,native));
+    assert(nav.remaining(300,1200)==32767);
+    assert(!nav.observe(nullptr,10,300,1200,native));
+    assert(!nav.observe(cts,10,300,1200,nullptr));
+    memcpy(cts+4,native,6); assert(!nav.observe(cts,10,300,1200,native));
+    cts[4]^=2;
+    assert(!nav.observe(cts,4097,300,1200,native));
+    cts[0]=0xd0; assert(!nav.observe(cts,10,300,1200,native));
+    cts[0]=0xcc; assert(!nav.observe(cts,10,300,1200,native));
+    cts[0]=0xc5; assert(!nav.observe(cts,10,300,1200,native));
+    cts[0]=0xc4; cts[2]=0x20; cts[3]=0;
+    nav={};
+    assert(nav.observe(cts,10,0xfffffff0U,2000,native));
+    assert(nav.remaining(0xfffffff0U,2000)==32 && nav.remaining(8,2001)==8);
+    assert(!nav.remaining(16,2002));
+    assert(nav.observe(cts,10,100,200001,native)); // New lease/old host observation is stale.
+    assert(nav.remaining(100,200001)==32);
     uint8_t observed[24] = {0xd0,0,0x80,0x01}; // 384 us Duration, management
     PendingRxObservation rx;
     for (size_t n=0;n<24;++n) rx.observe(observed,n,100,300);

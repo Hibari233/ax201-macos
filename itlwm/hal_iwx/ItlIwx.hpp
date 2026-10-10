@@ -205,6 +205,7 @@ private:
     void awdlPublishNativePeerProfile(IORegistryEntry *);
     ItlAwdl::SyncWireProfile awdlNativePeerProfile = {};
     uint32_t awdlNativePeerProfileSamples = 0;
+    ItlAwdl::ObservedReservation awdlObservedReservation;
     struct {
         bool ready = false;
         bool rejected = false;

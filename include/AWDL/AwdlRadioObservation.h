@@ -5,6 +5,36 @@
 #include "AwdlSchedule.h"
 
 namespace ItlAwdl {
+// A conservative software deferral based on decoded Duration/ID fields.
+// Firmware still owns NAV/CCA. This does not clear reservations, shorten them,
+// claim the medium is idle, or predict interference that was not decoded.
+class ObservedReservation {
+public:
+    bool observe(const uint8_t *frame, size_t length, uint32_t rxGp2,
+                 uint64_t hostUs, const uint8_t *local) {
+        if (!frame || !local || !unicastMac(local) || length < 10 || length > 4096 ||
+            (frame[0] & 3) || equalMac(frame + 4,local)) return false;
+        const auto type = frame[0] & 12;
+        if ((type != 0 && type != 4 && type != 8) || (type != 4 && length < 24)) return false;
+        const auto duration = le16(frame + 2);
+        if (!duration || (duration & 0x8000)) return false;
+        const auto end = rxGp2 + duration;
+        if (!valid_ || hostUs < hostUs_ || hostUs-hostUs_ > 100000 || clockDelta(end,endGp2_) > 0)
+            endGp2_ = end;
+        valid_ = true; hostUs_ = hostUs;
+        return true;
+    }
+    uint32_t remaining(uint32_t gp2, uint64_t hostUs) const {
+        if (!valid_ || hostUs < hostUs_ || hostUs-hostUs_ > 100000) return 0;
+        const auto delta = clockDelta(endGp2_,gp2);
+        return delta > 0 && delta <= 32767 ? uint32_t(delta) : 0;
+    }
+private:
+    bool valid_ = false;
+    uint32_t endGp2_ = 0;
+    uint64_t hostUs_ = 0;
+};
+
 struct PendingRxObservation {
     uint32_t frames = 0, bytes = 0, management = 0, control = 0, data = 0;
     uint32_t firstOffsetUs = 0, lastOffsetUs = 0, maxNavUs = 0;

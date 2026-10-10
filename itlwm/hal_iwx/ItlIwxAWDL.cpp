@@ -207,6 +207,7 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     awdl.rxTotal = awdl.rxAwdl = awdl.rxPeer = awdl.rxDropped = awdl.rxInvalid = 0;
     awdlNativePeerProfile = {};
     awdlNativePeerProfileSamples = 0;
+    awdlObservedReservation = {};
     bzero(&awdl.tx, sizeof(awdl.tx));
     awdl.lastPeerRxUs = awdl.lastProbeUs = 0;
     awdl.lastPeerGp2 = 0;
@@ -470,6 +471,11 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     result = awdlReadClock(&clock);
     const auto age = ItlAwdl::clockDelta(clock.gp2_us,gp2);
     if (result || (clock.flags&7)!=7 || age<0 || age>2000) return kIOReturnNotReady;
+    // Wait before giving a packet to firmware when a decoded reservation is
+    // still active. The caller will encode a fresh timestamp on its next try.
+    // This never disables or overrides the NIC's own carrier sensing.
+    if (awdlObservedReservation.remaining(clock.gp2_us,clock.host_end_us))
+        return kIOReturnNotReady;
     ItlAwdl::PeerTxWindow peerWindow = {};
     const int64_t localRemaining = int64_t(sync.down_counter_tu)*ItlAwdl::TuUs -
         sync.tx_delay_us - age;
@@ -1049,6 +1055,8 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     // RX MPDUs are contiguous here. Reject unexpectedly fragmented buffers.
     if (mbuf_len(m) != length) return;
     auto bytes = static_cast<const uint8_t *>(mbuf_data(m));
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated && channel == awdl.channel)
+        awdlObservedReservation.observe(bytes,length,gp2,awdlNowUs(),awdlNativeAddress);
     if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated &&
         channel == awdl.channel && awdlNativeTraceIndex < awdlNativeTraceCount &&
         awdlNativeTraceIndex < nitems(awdlNativeTrace)) {

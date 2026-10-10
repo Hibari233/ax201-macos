@@ -802,7 +802,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         uint64_t nextClockHostUs;
         bool timelineReady, sentWindow, unicast; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
-        uint32_t alignedSamples, alignmentUnavailable;
+        uint32_t alignedSamples, alignmentUnavailable, navDeferrals, maxNavRemainingUs;
         ItlAwdl::PeerTxWindow lastPeerWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
@@ -930,6 +930,12 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                     boundary.remainingUs > 12000 &&
                     o->channelSequence.plan().channels[boundary.slot] == s.channel;
                 if (overlap) ++c->overlapWindows;
+                const auto navRemaining = c->tx ? r->awdlObservedReservation.remaining(
+                    clock.gp2_us,clock.host_end_us) : 0;
+                if (c->tx && overlap && navRemaining) {
+                    ++c->navDeferrals;
+                    if (navRemaining > c->maxNavRemainingUs) c->maxNavRemainingUs = navRemaining;
+                }
                 if (c->tx && length) {
                     // Bound a qualification to four PSFs and one pending TX.
                     // Transmit only inside a selected-channel EAW, with time
@@ -941,7 +947,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                     } else if (r->awdlNativeTimingInvalid || r->awdlNativeMaxCompletionUs > 5000) {
                         out->last_error = kIOReturnTimeout; c->finished = true;
                     } else if (s.tx.submitted < 4 && !s.tx.pending &&
-                        (!c->sentWindow || window != c->lastWindow) && overlap) {
+                        (!c->sentWindow || window != c->lastWindow) && overlap && !navRemaining) {
                         auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us,c->unicast);
                         if (!sent) {
                             if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
@@ -1001,6 +1007,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 put("samples", out->samples); put("local_overlap", c->overlapWindows);
                 put("aligned_samples", c->alignedSamples);
                 put("alignment_unavailable", c->alignmentUnavailable);
+                put("tx_nav_deferred_samples", c->navDeferrals);
+                put("max_observed_nav_remaining_us", c->maxNavRemainingUs);
                 put("selected_channel", out->channel);
                 put("last_peer_channel", c->lastPeerWindow.channel);
                 put("last_peer_counter", c->lastPeerWindow.counter);
