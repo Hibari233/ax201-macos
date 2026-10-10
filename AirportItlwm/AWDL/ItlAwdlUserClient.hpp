@@ -35,4 +35,5 @@ private:
     static IOReturn dataStatus(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn dataProbe(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeInit(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeStart(OSObject *, void *, IOExternalMethodArguments *);
 };

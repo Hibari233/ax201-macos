@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "ItlAwdlNativeInterface.hpp"
 #include "AirportItlwmV2.hpp"
+#include <Airport/CCPipe.h>
 #include <libkern/version.h>
+#include <libkern/c++/OSSymbol.h>
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
@@ -9,6 +11,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {
     virtualInitAttempted = false;
     resourcesDisposed = false;
+    bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
+    backendCalls = peerCreationCalls = partialCleanups = 0;
     selfAddress = *address;
     controller = parent;
     controller->retain();
@@ -34,16 +38,163 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
         if (controller->isOpen(this)) controller->close(this);
         controller->deRegisterInterestedDriver(this);
     }
-    if (hasNativeVirtualStorage()) freeBpfResources();
+    if (hasNativeVirtualStorage() && !bpfDisposed) {
+        bpfDisposed = true;
+        freeBpfResources();
+    }
 }
 
 void ItlAwdlNativeInterface::free() {
+    if (startAttempted) stop(controller);
     disposeInitializedResources();
     OSSafeReleaseNULL(controller);
     // Audited 24H32: Skywalk::free dereferences its expansion before testing
     // for null. The lower bases tolerate absent/partially initialized storage.
     if (hasNativeSkywalkStorage()) IO80211AWDLProtocol::free();
     else IOSkywalkEthernetInterface::free();
+}
+
+bool ItlAwdlNativeInterface::start(IOService *provider) {
+    // Only the synchronous, exact-build probe may enter this stage. In
+    // particular, registry matching must never start this unfinished backend.
+    if (!startAllowed || startAttempted || resourcesDisposed || provider != controller)
+        return false;
+    startAttempted = true;
+    return IO80211VirtualInterface::start(provider);
+}
+
+void *ItlAwdlNativeInterface::createPeerManager() {
+    ++peerCreationCalls;
+    if (!startAllowed || failPeerCreation) return nullptr;
+    return IO80211VirtualInterface::createPeerManager();
+}
+
+void ItlAwdlNativeInterface::stop(IOService *provider) {
+    if (!startAttempted) return;
+    startAttempted = false;
+    startAllowed = false;
+    auto state = nativeStartState();
+    if (state && state->peerManager && state->controller) {
+        // Native VirtualInterface::stop includes the one BPF free and calls
+        // Skywalk::stop, which tears down the peer manager and log owners.
+        bpfDisposed = true;
+        IO80211VirtualInterface::stop(provider);
+    } else {
+        ++partialCleanups;
+        // Skywalk::stop unconditionally dereferences peerManager. Before it
+        // exists, stop only the independently audited log/power resources and
+        // let native free() release the retained controller/work queue later.
+        PMstop();
+        if (state) {
+            if (state->logPipe) state->logPipe->stopPipe();
+            OSSafeReleaseNULL(state->logPipe);
+            OSSafeReleaseNULL(state->logStream);
+            OSSafeReleaseNULL(state->macAgent);
+        }
+        IOSkywalkNetworkInterface::stop(provider);
+    }
+    if (controller && controller->getAwdlInterface() == this)
+        controller->setAwdlInterface(nullptr);
+}
+
+IOReturn ItlAwdlNativeInterface::probeStartGated(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeStartRequest *request, ItlAwdlNativeStartResponse *out) {
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    if (parent->isInactive()) return kIOReturnNotReady;
+    ItlAwdlStatusResponse status = {};
+    IOReturn result = radio->awdlCommand(parent, ItlAwdlStatus, nullptr, &status);
+    if (result) return result;
+    if (status.session != ItlAwdlIdle || parent->getAwdlInterface()) return kIOReturnBusy;
+    if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+    out->live_before = metaClass->getInstanceCount();
+    if (out->live_before) return kIOReturnBusy;
+    auto name = OSSymbol::withCStringNoCopy("IO80211AWDLPeerManager");
+    if (!name) return kIOReturnNoMemory;
+    auto peerClass = OSMetaClass::getMetaClassWithName(name);
+    name->release();
+    if (!peerClass) return kIOReturnUnsupported;
+    out->peer_live_before = peerClass->getInstanceCount();
+    if (out->peer_live_before) return kIOReturnBusy;
+    ether_addr address;
+    memcpy(address.ether_addr_octet, status.local_mac, sizeof(address.ether_addr_octet));
+    address.ether_addr_octet[0] = (address.ether_addr_octet[0] | 2) & ~1;
+    address.ether_addr_octet[5] ^= 0x80;
+    for (uint32_t i = 0; i < request->iterations; ++i) {
+        auto object = new ItlAwdlNativeInterface;
+        if (!object) { result = kIOReturnNoMemory; break; }
+        ++out->attempted;
+        ItlAwdlNativeInitResponse initialized = {};
+        bool ready = object->initializeForProbe(parent, &address, 2, &initialized);
+        bool attached = false;
+        if (ready) {
+            ++out->initialized;
+            attached = object->attach(parent);
+            if (attached) {
+                ++out->attached;
+                object->failPeerCreation = request->fail_peer_creation;
+                object->startAllowed = true;
+                IOLog("AX201 native probe: start, fail-peer=%u\n", request->fail_peer_creation);
+                bool started = object->start(parent);
+                auto state = object->nativeStartState();
+                bool created = state && state->peerManager;
+                if (started) ++out->start_succeeded;
+                if (!started && request->fail_peer_creation && object->peerCreationCalls == 1 && !created)
+                    ++out->expected_start_failures;
+                else if (!started || request->fail_peer_creation) result = kIOReturnError;
+                if (created) {
+                    ++out->peer_managers_created;
+                    if (state->peerManager->getMetaClass() != peerClass ||
+                        parent->getAwdlInterface() != object || peerClass->getInstanceCount() != 1)
+                        result = kIOReturnError;
+                }
+                if (started && !created) result = kIOReturnError;
+                if (object->getBSDInterface()) { ++out->bsd_interfaces; result = kIOReturnError; }
+                IOLog("AX201 native probe: stop, started=%u peer=%u\n", started, created);
+                object->stop(parent);
+                ++out->stopped;
+                out->partial_cleanups += object->partialCleanups;
+                if (created && !state->peerManager && !peerClass->getInstanceCount())
+                    ++out->peer_managers_released;
+                if (state && (state->peerManager || state->logPipe || state->logStream || state->macAgent))
+                    ++out->cleanup_errors;
+                out->peer_creation_calls += object->peerCreationCalls;
+            }
+        }
+        if (!ready || !attached) result = kIOReturnError;
+        object->disposeInitializedResources();
+        if (parent->isOpen(object)) ++out->provider_open_after;
+        if (attached) object->detach(parent);
+        out->backend_calls += object->backendCalls;
+        object->release();
+        ++out->released;
+        if (metaClass->getInstanceCount() || peerClass->getInstanceCount() ||
+            parent->getAwdlInterface() || out->provider_open_after || out->cleanup_errors)
+            result = kIOReturnError;
+        if (result) break;
+    }
+    out->live_after = metaClass->getInstanceCount();
+    out->peer_live_after = peerClass->getInstanceCount();
+    out->controller_pointer_after = parent->getAwdlInterface() != nullptr;
+    out->last_error = static_cast<uint32_t>(result);
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeStartRequest *request, ItlAwdlNativeStartResponse *out) {
+    if (!parent || !radio || !out || !request || request->version != ITL_AWDL_ABI_VERSION ||
+        request->reserved || !request->iterations || request->iterations > 4 ||
+        request->fail_peer_creation > 1) return kIOReturnBadArgument;
+    auto gate = radio->getMainCommandGate();
+    if (!gate) return kIOReturnNotReady;
+    struct Call { AirportItlwm *parent; ItlIwx *radio;
+        const ItlAwdlNativeStartRequest *request; ItlAwdlNativeStartResponse *out; } call = {
+            parent, radio, request, out};
+    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto call = static_cast<Call *>(argument);
+        return probeStartGated(call->parent, call->radio, call->request, call->out);
+    }, &call);
 }
 
 void ItlAwdlNativeInterface::checkUnsupportedContract(IO80211AWDLProtocol *object,

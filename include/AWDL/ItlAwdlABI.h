@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -90,6 +90,19 @@ struct ItlAwdlNativeInitResponse {
     uint32_t methods_checked, method_failures, provider_open_after, last_error;
     uint32_t provider_opened;
 };
+// Native start/stop only: no BSD/queue registration, link enable or radio TX.
+// fail_peer_creation == 1 injects failure at our createPeerManager override.
+struct ItlAwdlNativeStartRequest {
+    uint32_t version, iterations, fail_peer_creation, reserved;
+};
+struct ItlAwdlNativeStartResponse {
+    uint32_t version, attempted, initialized, attached;
+    uint32_t start_succeeded, expected_start_failures, peer_managers_created, peer_managers_released;
+    uint32_t stopped, partial_cleanups, released, live_before;
+    uint32_t live_after, provider_open_after, controller_pointer_after, last_error;
+    uint32_t backend_calls, bsd_interfaces, cleanup_errors, peer_creation_calls;
+    uint32_t peer_live_before, peer_live_after;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -117,6 +130,9 @@ static_assert(sizeof(ItlAwdlDataProbeRequest) == 16, "AWDL fixed echo request AB
 static_assert(sizeof(ItlAwdlNativeInitRequest) == 16, "native init request ABI");
 static_assert(sizeof(ItlAwdlNativeInitResponse) == 52, "native init response ABI");
 static_assert(ItlAwdlDataProbe == 18 && ItlAwdlNativeInit == 19, "append-only native init ABI");
+static_assert(ItlAwdlNativeStart == 20, "append-only native start ABI");
+static_assert(sizeof(ItlAwdlNativeStartRequest) == 16, "native start request ABI");
+static_assert(sizeof(ItlAwdlNativeStartResponse) == 88, "native start response ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");

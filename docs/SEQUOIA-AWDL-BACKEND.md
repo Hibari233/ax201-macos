@@ -66,11 +66,42 @@ In 24H32 the getter returns six address bytes in the return register and native
 declaration now returns by value; the probe implements an in-memory address so
 the getter also works before `start()` creates the native MAC address agent.
 
-This stage deliberately rejects `start()`: no peer manager, BSD `awdl0`, packet
-queues, RF changes, or native AirDrop capability are registered. The compiled
+The initialization selector never calls `start()`: no peer manager, BSD `awdl0`,
+packet queues, RF changes, or native AirDrop capability are registered. The compiled
 class's 560 vtable entries (including the 63 backend slots) were compared with
 24H32; no slot/symbol mismatch was found. Runtime evidence is recorded separately
 in `VALIDATION.md` when available.
+
+## Bounded native start probe
+
+Root-only selector 20 additionally attaches an initialized role-6 object,
+calls the native `start()` chain, inspects its peer-manager ownership, then
+stops, detaches and releases it. Capability bit 1024 identifies this probe.
+It uses the same exact-build/device checks and radio gate, accepts 1–4 cycles,
+and refuses existing native AWDL objects. Registry matching cannot start the
+backend; only this synchronous probe sets its private start permission.
+
+```
+sudo build/tools/awdl_native_init start-selftest
+sudo build/tools/awdl_native_init start 1 1  # deliberately fail peer creation
+sudo build/tools/awdl_native_init start 1 0  # native start/stop
+```
+
+The injected failure returns null from this subclass's peer-manager factory,
+after native start has retained its controller/work queue and created logging
+resources. It does not modify Apple's code or allocator. Before a peer manager
+exists, cleanup stops/releases the independently audited log pipe and stream,
+stops power management, and calls the lower network-interface stop. The native
+free path subsequently releases the controller/work queue. Once a peer manager
+exists, the native virtual-interface stop handles it and the one BPF cleanup.
+The controller's non-retaining AWDL pointer is cleared before the object is
+released. The audited start ownership fields are restricted to 24H32, and the
+compiled `CCPipe::stopPipe()` call was checked against native vptr offset `0x870`.
+
+Reports include native peer-manager instance counts, balanced opens, disposal,
+backend call counts and unexpected BSD interfaces. A passing lifecycle probe
+does not establish a working radio or networking interface. There is still no
+queue/BSD registration, link enable or packet transport from this path.
 
 ## Request extents
 
@@ -96,7 +127,7 @@ return success for unimplemented firmware operations, and not proof that all
 values; changing return conventions globally would lose these specific native
 fallbacks.
 
-Next: integrate started-interface teardown, remaining required request sizes,
+Next: validate started-interface teardown, remaining required request sizes,
 action/data output ownership, firmware MAC/PHY contexts, and native RX queue
 metadata before instantiating and registering an interface. Default capability
 bits must continue to describe the implemented Wi-Fi driver, not an unverified

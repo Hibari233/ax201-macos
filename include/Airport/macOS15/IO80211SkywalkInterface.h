@@ -199,6 +199,29 @@ private: virtual void _abi_0e50() __asm__("__ZN23IO80211SkywalkInterface18getLas
 private: virtual void _abi_0e58() __asm__("__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"); public:
 private: uint8_t _layout[0x118 - sizeof(IOSkywalkEthernetInterface)];
 protected:
+    // Only these start/stop ownership fields have been audited for 24H32.
+    // No interface/firmware state is inferred from the opaque bytes.
+    struct NativeStartState {
+        uint8_t opaque00[0x28];
+        OSObject *peerManager;
+        IO80211Controller *controller;
+        OSObject *workQueue;
+        uint8_t opaque40[0x10];
+        OSObject *macAgent;
+        uint8_t opaque58[0x20];
+        OSObject *logStream;
+        CCPipe *logPipe;
+    };
+    static_assert(__offsetof(NativeStartState, peerManager) == 0x28, "native peer owner");
+    static_assert(__offsetof(NativeStartState, controller) == 0x30, "native controller owner");
+    static_assert(__offsetof(NativeStartState, macAgent) == 0x50, "native MAC owner");
+    static_assert(__offsetof(NativeStartState, logStream) == 0x78, "native log owner");
+    static_assert(__offsetof(NativeStartState, logPipe) == 0x80, "native pipe owner");
+    NativeStartState *nativeStartState() const {
+        NativeStartState *storage = nullptr;
+        memcpy(&storage, _layout, sizeof(storage));
+        return storage;
+    }
     // 24H32: the sole field at 0x110 is the native expansion pointer.
     // free() dereferences it before its null check. A subclass whose init()
     // failed must select the lower base's free() when this storage is absent.
