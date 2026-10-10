@@ -213,6 +213,9 @@ private:
     bool awdlLinkMatches(bool requireChannel = true) const;
     void awdlFinishLinkedStop();
     IOReturn awdlProbe(OSObject *, bool scheduled = false);
+    IOReturn awdlDataProbe(OSObject *, const ItlAwdlDataProbeRequest *);
+    IOReturn awdlTransmitGuard(OSObject *, bool data, bool scheduled);
+    IOReturn awdlSubmitDiagnostic(const uint8_t *, size_t);
     IOReturn awdlReadClock(ItlAwdlClockResponse *);
     IOReturn awdlRun(OSObject *, const ItlAwdlRunRequest *);
     IOReturn awdlRefreshCountry(OSObject *, bool station = false);

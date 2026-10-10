@@ -3,6 +3,7 @@
 #include "ItlIwx.hpp"
 #include <AWDL/AwdlFrame.h>
 #include <AWDL/AwdlData.h>
+#include <AWDL/AwdlEcho.h>
 #include <AWDL/AwdlRegulatory.h>
 #include <kern/clock.h>
 
@@ -37,7 +38,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 255; // Includes bounded IPv6 RX diagnostics. No native AirDrop.
+            out->capabilities = 511; // Includes bounded IPv6 RX/fixed echo TX. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -80,6 +81,8 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
         }
         case ItlAwdlProbe:
             return self->awdlProbe(call->owner);
+        case ItlAwdlDataProbe:
+            return self->awdlDataProbe(call->owner, static_cast<const ItlAwdlDataProbeRequest *>(call->input));
         case ItlAwdlClock:
             if (!call->output) return kIOReturnBadArgument;
             if (!s.owner || s.owner != call->owner) return kIOReturnNotPermitted;
@@ -338,10 +341,10 @@ void ItlIwx::awdlFinishLinkedStop() {
     awdl.session = ItlAwdlIdle;
 }
 
-IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
+IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled) {
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
-    if (awdl.linked || awdl.dataStatus.enabled) return kIOReturnUnsupported;
+    if (awdl.linked || bool(awdl.dataStatus.enabled) != data) return kIOReturnUnsupported;
     if (!scheduled && (awdl.commandBusy || awdl.run.active)) return kIOReturnBusy;
     if (scheduled && awdl.mccNeedsRefresh) return kIOReturnNotReady;
     if (awdl.session != ItlAwdlListening || ic->ic_opmode != IEEE80211_M_MONITOR ||
@@ -358,9 +361,12 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
         awdl.lastMccQueryUs = now;
         ++awdl.mccQueries;
         int generation = com.sc_generation;
+        const uint32_t epoch = awdl.epoch;
+        awdl.commandBusy = true;
         awdl.mccError = iwx_send_update_mcc_cmd(&com, "ZZ");
+        awdl.commandBusy = false;
         // The synchronous firmware call can release the gate while waiting.
-        if (generation != com.sc_generation || awdl.session != ItlAwdlListening ||
+        if (generation != com.sc_generation || epoch != awdl.epoch || awdl.session != ItlAwdlListening ||
             awdl.owner != owner) return kIOReturnAborted;
         if (awdl.mccError) return kIOReturnIOError;
         now = awdlNowUs();
@@ -375,17 +381,46 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
     if (awdl.tx.submitted >= 8) return kIOReturnNoSpace;
     if (awdl.tx.pending || (awdl.lastProbeUs && now - awdl.lastProbeUs < 100000))
         return kIOReturnBusy;
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
+    auto result = awdlTransmitGuard(owner, false, scheduled);
+    if (result) return result;
     uint8_t bytes[ItlAwdl::ProbeLength];
-    if (!ItlAwdl::buildProbe(bytes, sizeof(bytes), ic->ic_myaddr, awdl.peer,
-                            uint16_t(awdl.tx.submitted), uint32_t(now))) return kIOReturnBadArgument;
+    if (!ItlAwdl::buildProbe(bytes, sizeof(bytes), com.sc_ic.ic_myaddr, awdl.peer,
+                            uint16_t(awdl.tx.submitted), uint32_t(awdlNowUs()))) return kIOReturnBadArgument;
+    return awdlSubmitDiagnostic(bytes, sizeof(bytes));
+}
+
+IOReturn ItlIwx::awdlDataProbe(OSObject *owner, const ItlAwdlDataProbeRequest *request) {
+    if (!request || request->version != ITL_AWDL_ABI_VERSION || request->reserved ||
+        !request->token || !ItlAwdl::echoLength(request->length)) return kIOReturnBadArgument;
+    auto result = awdlTransmitGuard(owner, true, false);
+    if (result) return result;
+    uint8_t bytes[40 + ItlAwdl::DataMtu];
+    auto source = com.sc_ic.ic_myaddr;
+    const uint16_t sequence = uint16_t(awdl.tx.submitted);
+    if (!ItlAwdl::buildEchoIpv6(bytes + 40, ItlAwdl::DataMtu, source, awdl.peer,
+                               request->length, request->token, sequence)) return kIOReturnBadArgument;
+    // encodeData's payload source is exactly its destination, not a partially
+    // overlapping buffer. This keeps the kernel stack bounded to one MPDU.
+    auto length = ItlAwdl::encodeData(bytes, sizeof(bytes), source, awdl.peer,
+                                     sequence, sequence, bytes + 40, request->length);
+    if (!length) return kIOReturnBadArgument;
+    return awdlSubmitDiagnostic(bytes, length);
+}
+
+IOReturn ItlIwx::awdlSubmitDiagnostic(const uint8_t *bytes, size_t length) {
+    auto ic = &com.sc_ic;
     mbuf_t packet = nullptr;
     unsigned chunks = 1;
-    int error = mbuf_allocpacket(MBUF_DONTWAIT, sizeof(bytes), &chunks, &packet);
+    int error = mbuf_allocpacket(MBUF_DONTWAIT, length, &chunks, &packet);
     if (error || !packet) { awdl.tx.last_host_error = error ? error : ENOMEM; return kIOReturnNoMemory; }
-    error = mbuf_copyback(packet, 0, sizeof(bytes), bytes, MBUF_DONTWAIT);
+    error = mbuf_copyback(packet, 0, length, bytes, MBUF_DONTWAIT);
     if (error) { mbuf_freem(packet); awdl.tx.last_host_error = error; return kIOReturnNoMemory; }
-    mbuf_setlen(packet, sizeof(bytes));
-    mbuf_pkthdr_setlen(packet, sizeof(bytes));
+    mbuf_setlen(packet, length);
+    mbuf_pkthdr_setlen(packet, length);
     auto node = ieee80211_ref_node(ic->ic_bss);
     // iwx_tx consumes the mbuf on success AND failure; the node reference
     // transfers only on success and is then released by TX completion/stop.
@@ -397,7 +432,7 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
     }
     ++awdl.tx.submitted;
     ++awdl.tx.pending;
-    awdl.lastProbeUs = now;
+    awdl.lastProbeUs = awdlNowUs();
     return kIOReturnSuccess;
 }
 

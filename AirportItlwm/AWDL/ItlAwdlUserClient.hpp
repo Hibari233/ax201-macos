@@ -33,4 +33,5 @@ private:
     static IOReturn beginData(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn readData(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn dataStatus(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn dataProbe(OSObject *, void *, IOExternalMethodArguments *);
 };

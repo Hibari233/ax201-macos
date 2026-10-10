@@ -6915,8 +6915,9 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     int type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     int min_ridx = iwx_rval2ridx(ieee80211_min_basic_rate(ic));
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    // AWDL management frames use the 6 Mbit/s OFDM basic rate, including
-    // channel 6. Do not inherit an infrastructure BSS's CCK basic rate.
+    // AWDL diagnostic frames use 6 Mbit/s OFDM, including channel 6.
+    // The monitor station has no infrastructure link-quality table. Unicast
+    // data must also use CMD_RATE rather than firmware-selected STA rates.
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR)
         min_ridx = iwx_rval2ridx(12);
 #endif
@@ -6925,7 +6926,11 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     uint8_t hwrate;
 
     *flags = 0;
-    if (IEEE80211_IS_MULTICAST(wh->i_addr1) ||
+    if (
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) ||
+#endif
+        IEEE80211_IS_MULTICAST(wh->i_addr1) ||
         type != IEEE80211_FC0_TYPE_DATA) {
         /* for non-data, use the lowest supported rate */
         ridx = min_ridx;

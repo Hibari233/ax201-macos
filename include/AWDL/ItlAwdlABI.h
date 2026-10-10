@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -60,7 +60,8 @@ struct ItlAwdlLinkedStatusResponse {
     uint32_t channel, filter_enabled, restore_error, link_matches;
 };
 // BeginData uses BeginRequest: exclusive monitor, one owned peer, <=30 s.
-// Receive-only; probe TX and timed radio experiments are disallowed.
+// RX by default; legacy management probes and timed radio tests disallowed.
+// DataProbe explicitly submits a fixed diagnostic echo, not arbitrary bytes.
 struct ItlAwdlDataResponse {
     uint32_t version, length, channel;
     int32_t rssi_dbm;
@@ -73,6 +74,9 @@ struct ItlAwdlDataResponse {
 struct ItlAwdlDataStatusResponse {
     uint32_t version, enabled, accepted, malformed;
     uint32_t unsupported, dropped, queued, reserved;
+};
+struct ItlAwdlDataProbeRequest {
+    uint32_t version, length, token, reserved; // IPv6 length 64..1500; nonzero run token.
 };
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
@@ -97,6 +101,7 @@ struct ItlAwdlRunStatusResponse {
 };
 #ifdef __cplusplus
 static_assert(sizeof(ItlAwdlBeginRequest) == 24, "AWDL request ABI");
+static_assert(sizeof(ItlAwdlDataProbeRequest) == 16, "AWDL fixed echo request ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");

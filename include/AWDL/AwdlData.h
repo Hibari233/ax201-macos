@@ -131,7 +131,8 @@ inline DataResult decodeData(const uint8_t *p, size_t n, bool deaggregated, Data
     if (out) *out = batch;
     return DataResult::Valid;
 }
-// Offline-tested encapsulator for a future TX path. No radio submission here.
+// Short-form encapsulator. Exact in-place payload (ipv6 == out + 40) is safe;
+// partially overlapping inputs are not supported. No radio submission here.
 inline size_t encodeData(uint8_t *out, size_t capacity, const uint8_t *source,
                          const uint8_t *destination, uint16_t wifiSequence,
                          uint16_t awdlSequence, const uint8_t *ipv6, size_t length) {

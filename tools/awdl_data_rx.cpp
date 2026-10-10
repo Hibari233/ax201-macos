@@ -4,6 +4,7 @@
 #include <IOKit/IOKitLib.h>
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlData.h>
+#include <AWDL/AwdlEcho.h>
 #include <chrono>
 #include <signal.h>
 #include <stdio.h>
@@ -62,6 +63,15 @@ static int selftest(io_connect_t c) {
     t.expect("read without owner", readValue(c, ItlAwdlReadData, packet), kIOReturnNotPermitted);
     ItlAwdlDataStatusResponse s = {}; n = sizeof(s)-1;
     t.expect("short status", IOConnectCallStructMethod(c, ItlAwdlDataStatus, nullptr, 0, &s, &n), kIOReturnBadArgument);
+    ItlAwdlDataProbeRequest probe = {1,64,1,0};
+    auto tx = [&]() { return IOConnectCallStructMethod(c, ItlAwdlDataProbe, &probe, sizeof(probe), nullptr, nullptr); };
+    t.expect("short data probe", IOConnectCallStructMethod(c, ItlAwdlDataProbe, &probe, sizeof(probe)-1, nullptr, nullptr), kIOReturnBadArgument);
+    probe.version = 0; t.expect("probe version", tx(), kIOReturnBadArgument); probe.version = 1;
+    probe.reserved = 1; t.expect("probe reserved", tx(), kIOReturnBadArgument); probe.reserved = 0;
+    probe.token = 0; t.expect("probe token", tx(), kIOReturnBadArgument); probe.token = 1;
+    probe.length = 63; t.expect("probe too small", tx(), kIOReturnBadArgument);
+    probe.length = 1501; t.expect("probe too large", tx(), kIOReturnBadArgument); probe.length = 64;
+    t.expect("probe without owner", tx(), kIOReturnNotPermitted);
     t.expect("unknown selector", IOConnectCallStructMethod(c, ItlAwdlMethodCount, nullptr, 0, nullptr, nullptr), kIOReturnUnsupported);
     return t.report();
 }
@@ -72,22 +82,26 @@ static bool number(const char *s, unsigned long *out) {
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: awdl_data_rx status|selftest|listen|expire|close|die CHANNEL SECONDS OWNED_PEER_MAC\n"
+                        "       awdl_data_rx probe CHANNEL SECONDS OWNED_PEER_MAC IPV6_LENGTH\n"
                         "Wi-Fi must be off for capture; restore it after this program. Ethernet is recommended.\n");
         return 2;
     }
     bool status = !strcmp(argv[1], "status"), test = !strcmp(argv[1], "selftest");
     bool listen = !strcmp(argv[1], "listen"), expire = !strcmp(argv[1], "expire"), die = !strcmp(argv[1], "die");
     bool closeEarly = !strcmp(argv[1], "close");
+    bool probe = !strcmp(argv[1], "probe");
+    unsigned long probeLength = 0;
     ItlAwdlBeginRequest b = {}; b.version = 1;
-    if ((!status && !test && !listen && !expire && !die && !closeEarly) || ((status || test) && argc != 2)) return 2;
-    if (listen || expire || die || closeEarly) {
+    if ((!status && !test && !listen && !expire && !die && !closeEarly && !probe) || ((status || test) && argc != 2)) return 2;
+    if (listen || expire || die || closeEarly || probe) {
         unsigned long channel = 0, seconds = 0; unsigned mac[6]; char extra;
-        if (argc != 5 || !number(argv[2], &channel) || !number(argv[3], &seconds) ||
+        if (argc != (probe ? 6 : 5) || !number(argv[2], &channel) || !number(argv[3], &seconds) ||
             (channel != 6 && channel != 44 && channel != 149) || seconds < 1 || seconds > 30 ||
             sscanf(argv[4], "%2x:%2x:%2x:%2x:%2x:%2x%c", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5], &extra) != 6) return 2;
         for (unsigned i = 0; i < 6; ++i) b.peer[i] = uint8_t(mac[i]);
         if (!ItlAwdl::unicastMac(b.peer)) return 2;
         b.channel = uint32_t(channel); b.dwell_ms = uint32_t(seconds * 1000);
+        if (probe && (!number(argv[5], &probeLength) || !ItlAwdl::echoLength(probeLength))) return 2;
     }
     io_connect_t c = IO_OBJECT_NULL; auto r = openClient(&c);
     if (r) { fprintf(stderr, "Open: 0x%x (root required)\n", r); return 1; }
@@ -99,6 +113,7 @@ int main(int argc, char **argv) {
     ItlAwdlStatusResponse initial = {};
     r = readValue(c, ItlAwdlStatus, initial);
     if (r) { fprintf(stderr, "Initial status: 0x%x\n", r); IOServiceClose(c); return 1; }
+    if (probe && !(initial.capabilities & 256)) { fprintf(stderr, "Driver has no fixed data probe support\n"); IOServiceClose(c); return 1; }
     r = IOConnectCallStructMethod(c, ItlAwdlBeginData, &b, sizeof(b), nullptr, nullptr);
     if (r) { fprintf(stderr, "Begin data RX: 0x%x\n", r); IOServiceClose(c); return 1; }
     if (die) { puts("{\"client_death_test\":true}"); fflush(stdout); _exit(0); }
@@ -113,12 +128,26 @@ int main(int argc, char **argv) {
         checks.expect("foreign read", readValue(other, ItlAwdlReadData, packet), kIOReturnNotPermitted);
         checks.expect("foreign end", IOConnectCallStructMethod(other, ItlAwdlEnd, nullptr, 0, nullptr, nullptr), kIOReturnNotPermitted);
         checks.expect("foreign begin", IOConnectCallStructMethod(other, ItlAwdlBeginData, &b, sizeof(b), nullptr, nullptr), kIOReturnBusy);
+        ItlAwdlDataProbeRequest req = {1,64,1,0};
+        checks.expect("foreign data TX", IOConnectCallStructMethod(other, ItlAwdlDataProbe, &req, sizeof(req), nullptr, nullptr), kIOReturnNotPermitted);
         IOServiceClose(other);
     }
     using Clock = std::chrono::steady_clock;
     auto deadline = Clock::now() + std::chrono::milliseconds(closeEarly ? b.dwell_ms / 2 : b.dwell_ms + (expire ? 1000 : 0));
+    auto nextProbe = Clock::now();
+    ItlAwdlDataProbeRequest request = {1, uint32_t(probeLength), arc4random() | 1U, 0};
+    unsigned sent = 0, echoes = 0, echoed = 0, denied = 0, notReady = 0, busy = 0;
     unsigned received = 0, checksummed = 0, checksumFailed = 0, checksumUnavailable = 0;
     while (!interrupted && Clock::now() < deadline && !checks.failed) {
+        if (probe && sent < 8 && Clock::now() >= nextProbe) {
+            nextProbe = Clock::now() + std::chrono::milliseconds(100);
+            auto result = IOConnectCallStructMethod(c, ItlAwdlDataProbe, &request, sizeof(request), nullptr, nullptr);
+            if (!result) ++sent;
+            else if (result == kIOReturnNotPermitted) ++denied;
+            else if (result == kIOReturnNotReady) ++notReady;
+            else if (result == kIOReturnBusy) ++busy;
+            else checks.expect("fixed data probe", result, kIOReturnSuccess);
+        }
         ItlAwdlDataResponse p = {};
         r = readValue(c, ItlAwdlReadData, p);
         if (!r) {
@@ -131,6 +160,15 @@ int main(int argc, char **argv) {
             if (checksum == ItlAwdl::DataChecksum::Valid) ++checksummed;
             else if (checksum == ItlAwdl::DataChecksum::Invalid) ++checksumFailed;
             else ++checksumUnavailable;
+            if (probe && p.length >= 48) {
+                unsigned sequence = ItlAwdl::be16(p.ipv6 + 46);
+                if (sequence < sent && sequence < 8 && !(echoed & (1U << sequence)) &&
+                    ItlAwdl::equalMac(p.destination, initial.local_mac) &&
+                    ItlAwdl::matchesEchoReply(p.ipv6, p.length, initial.local_mac, b.peer,
+                                             probeLength, request.token, uint16_t(sequence))) {
+                    echoed |= 1U << sequence; ++echoes;
+                }
+            }
             printf("{\"ipv6_rx\":true,\"length\":%u,\"sequence\":%u,\"channel\":%u,\"next_header\":%u,\"rssi\":%d}\n",
                    p.length, p.sequence, p.channel, p.ipv6[6], p.rssi_dbm);
         } else if (r != kIOReturnNotReady) { checks.expect("read", r, kIOReturnNotReady); break; }
@@ -161,6 +199,18 @@ int main(int argc, char **argv) {
     checks.expect("restored interface power", restored.if_flags & 0x41, initial.if_flags & 0x41);
     if (closeEarly && !interrupted) checks.expect("explicit close reason", restored.stop_reason, ItlAwdlClosed);
     showStatus(c);
+    if (probe) {
+        ItlAwdlTxStatusResponse tx = {};
+        checks.expect("data TX completion status", readValue(c, ItlAwdlTxStatus, tx), kIOReturnSuccess);
+        checks.expect("submitted count", tx.submitted, sent);
+        checks.expect("pending cleared", tx.pending, 0);
+        checks.expect("completion accounting", tx.completed + tx.aborted, tx.submitted);
+        checks.expect("firmware accounting", tx.succeeded + tx.failed, tx.completed);
+        printf("{\"fixed_data_probe\":true,\"length\":%lu,\"submitted\":%u,\"firmware_success\":%u,"
+               "\"firmware_failed\":%u,\"aborted\":%u,\"last_firmware_status\":%u,\"echo_replies\":%u,"
+               "\"regulatory_denied\":%u,\"peer_not_ready\":%u,\"busy\":%u}\n",
+               probeLength, sent, tx.succeeded, tx.failed, tx.aborted, tx.last_firmware_status, echoes, denied, notReady, busy);
+    }
     IOServiceClose(c);
     checks.expect("transport checksums", checksumFailed, 0);
     printf("{\"received\":%u,\"checksums_valid\":%u,\"checksums_failed\":%u,\"checksums_unavailable\":%u,\"native_airdrop\":false}\n",

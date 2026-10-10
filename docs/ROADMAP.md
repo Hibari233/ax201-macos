@@ -18,9 +18,10 @@ AirDrop or universal adapter support. Each step needs its own evidence.
 AirDrop is the current priority. Stage numbers describe dependencies, not a
 requirement to complete WPA3 before AWDL.
 
-1. Validate the new AWDL IPv6 receive path on owned hardware. Revision 10 adds
-   an opt-in, receive-only, bounded monitor session and a tested data codec;
-   it does not create a native interface or implement peer negotiation.
+1. Extend the verified 1280-byte AWDL receive path into bidirectional data.
+   Revision 11 adds explicit, bounded fixed echo transmission and reply checks;
+   hardware results must distinguish submission, completion and peer replies.
+   Unfragmented 1500-byte reception remains unqualified.
 2. Establish bidirectional peer IPv6: validated peer state, advertisements,
    synchronization, permitted firmware TX/ACK handling, then independent
    radio contexts and STA coexistence. Passive reception alone is insufficient.

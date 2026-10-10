@@ -54,6 +54,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {beginData, 0, sizeof(ItlAwdlBeginRequest), 0, 0},
         {readData, 0, 0, 0, sizeof(ItlAwdlDataResponse)},
         {dataStatus, 0, 0, 0, sizeof(ItlAwdlDataStatusResponse)},
+        {dataProbe, 0, sizeof(ItlAwdlDataProbeRequest), 0, 0},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -134,6 +135,10 @@ IOReturn ItlAwdlUserClient::readData(OSObject *o, void *, IOExternalMethodArgume
 IOReturn ItlAwdlUserClient::dataStatus(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
     return self->radio->awdlCommand(self, ItlAwdlDataStatus, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::dataProbe(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return self->radio->awdlCommand(self, ItlAwdlDataProbe, a->structureInput, nullptr);
 }
 
 IOReturn AirportItlwm::newUserClient(task_t task, void *token, UInt32 type,
