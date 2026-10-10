@@ -829,3 +829,42 @@ pings passed 18/18; before/after GPU, display and power checks passed.
 
 This verifies real native template production and CPU-only encoding. No RF
 synchronization, native RX delivery, peer discovery or AirDrop transfer occurred.
+
+## Retained-manager radio ownership and hardware clock — 2026-10-10
+
+Source `b333bb726afb387449e454eefee4eff0444317a7` (revision 34):
+
+- Binary SHA-256: `9507e40ace37e22c434a2ee111413fc7f41be82ea136d4d693ef4c7c036e1ed8`
+- Loaded UUID: `B8CB3CAC-979D-33E4-8ECA-9DCC3FA26EE6`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38052744576)
+  passed all three jobs. Local UBSan, the native ABI fixture and concrete
+  560-slot comparison passed. Installation verified a revision 33 rollback.
+
+All 384 initialization contracts and the native configure/template regression
+checks passed. Twelve malformed radio requests were rejected. A radio request
+while ordinary STA Wi-Fi was connected returned busy, without disrupting its
+router connectivity.
+
+After explicitly turning off STA, two 3000 ms receive-only monitor sessions
+ran on the staged master channel 6, retaining the same native interface and
+peer manager. Both expired automatically, restored INIT/STA mode and the exact
+original interface flags, and left no radio owner. Native backend calls stayed
+at twelve; peer-manager creation stayed at one.
+
+The two sessions sampled the hardware clock 134/133 times, with 132/131 coherent
+rate samples. All 263 coherent samples encoded and parsed the native template
+as a 210-byte MPDU. Each session received **20 management frames from the owned
+test peer**. Each filled its 16-frame diagnostic ring and dropped four further
+ring records; malformed-frame counters remained zero. Clock/RX-domain checks
+passed on 133/130 samples. No raw captures were published.
+
+Ordinary WPA2 Wi-Fi was restored after the sessions. Router pings passed 27/27
+across initialization, configuration, template, refusal and restoration checks;
+GPU/display/power assertions passed. Controller termination and process-death
+cancellation were not hardware tested by this run.
+
+This demonstrates retained-manager radio ownership, clock continuity and
+receive-only observation. The encoded specimens use constructed AW timing;
+they were never transmitted. Native interface/queues stayed disabled and
+unpublished, and received frames were not handed to the native protocol. Native
+peer discovery and AirDrop transfer remain unimplemented.
