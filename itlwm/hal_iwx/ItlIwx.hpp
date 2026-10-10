@@ -177,6 +177,23 @@ private:
     uint32_t awdlNativeP2pCommandVersion = 0, awdlNativeP2pNotifVersion = 0;
     int awdlStartNativeP2pSession();
     void awdlPublishNativeP2pSession(IORegistryEntry *);
+    enum NativeRadioResetSource : uint32_t {
+        NativeResetUnknown = 1, NativeResetFirmware, NativeResetHardware,
+        NativeResetRfKill, NativeResetThermal, NativeResetWatchdog,
+        NativeResetState, NativeResetWake
+    };
+    struct NativeRadioFault {
+        uint32_t source, events, detail1, detail2, generation, flags;
+        uint32_t submitted, pending, queueId, queued, queueHead, queueTail, rxHead;
+        uint32_t netState, txTimer;
+        uint64_t remainingUs;
+        struct Firmware {
+            // 0: not read, 1: invalid pointer, 2: read failed, 3: empty, 4: valid.
+            uint32_t readStatus, errorId, data1, data2, data3, command, lastCommand, time;
+        } lmac, umac;
+    } awdlNativeFault = {};
+    void awdlRecordNativeRadioReset(NativeRadioResetSource, uint32_t = 0, uint32_t = 0);
+    void awdlPublishNativeRadioFault(IORegistryEntry *);
     uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
     uint32_t awdlNativeTxGp2 = 0, awdlNativeTimingSamples = 0, awdlNativeTimingInvalid = 0;
     uint32_t awdlNativeMaxCompletionUs = 0, awdlNativeLastRate = 0;

@@ -209,6 +209,7 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     awdlNativePeerProfileSamples = 0;
     awdlObservedReservation = {};
     awdlNativeP2pSession = {};
+    awdlNativeFault = {};
     awdlNativeP2pCommandVersion = awdlNativeP2pNotifVersion = 0;
     bzero(&awdl.tx, sizeof(awdl.tx));
     awdl.lastPeerRxUs = awdl.lastProbeUs = 0;
@@ -748,6 +749,56 @@ int ItlIwx::awdlStartNativeP2pSession() {
     if (error) awdlNativeP2pSession.fail();
     if (generation!=com.sc_generation || !awdlActive()) return ECANCELED;
     return error;
+}
+
+void ItlIwx::awdlRecordNativeRadioReset(NativeRadioResetSource source, uint32_t detail1, uint32_t detail2) {
+    if (!awdlNativeRadioOwner || !awdlActive()) return;
+    auto &f=awdlNativeFault;
+    ++f.events;
+    // Preserve the trigger before init_task turns it into a generic EIO.
+    // No MMIO, logging, allocation or additional firmware command here.
+    if (f.source) return;
+    f.source=source; f.detail1=detail1; f.detail2=detail2;
+    f.generation=com.sc_generation; f.flags=com.sc_flags;
+    f.submitted=awdl.tx.submitted; f.pending=awdl.tx.pending;
+    f.netState=com.sc_ic.ic_state; f.txTimer=com.sc_tx_timer;
+    f.queueId=com.first_data_qid;
+    if (f.queueId<nitems(com.txq)) {
+        const auto &q=com.txq[f.queueId];
+        f.queued=q.queued; f.queueHead=q.cur; f.queueTail=q.tail;
+    }
+    f.rxHead=com.rxq.cur;
+    const auto now=awdlNowUs();
+    f.remainingUs=now<awdl.deadlineUs ? awdl.deadlineUs-now : 0;
+}
+
+void ItlIwx::awdlPublishNativeRadioFault(IORegistryEntry *owner) {
+    if (!owner) return;
+    auto d=OSDictionary::withCapacity(20);
+    if (!d) return;
+    auto put=[](OSDictionary *dict,const char *key,uint64_t value) {
+        auto n=OSNumber::withNumber(value,64);
+        if (n) { dict->setObject(key,n); n->release(); }
+    };
+    const auto &f=awdlNativeFault;
+    put(d,"source",f.source); put(d,"events",f.events);
+    put(d,"detail1",f.detail1); put(d,"detail2",f.detail2);
+    put(d,"generation",f.generation); put(d,"flags",f.flags);
+    put(d,"submitted",f.submitted); put(d,"pending",f.pending);
+    put(d,"queue_id",f.queueId); put(d,"queued",f.queued);
+    put(d,"queue_head",f.queueHead); put(d,"queue_tail",f.queueTail);
+    put(d,"rx_head",f.rxHead); put(d,"net_state",f.netState);
+    put(d,"tx_timer",f.txTimer); put(d,"lease_remaining_us",f.remainingUs);
+    auto firmware=[&](const char *name,const NativeRadioFault::Firmware &fw) {
+        auto inner=OSDictionary::withCapacity(8);
+        if (!inner) return;
+        put(inner,"read_status",fw.readStatus); put(inner,"error_id",fw.errorId);
+        put(inner,"data1",fw.data1); put(inner,"data2",fw.data2); put(inner,"data3",fw.data3);
+        put(inner,"command",fw.command); put(inner,"last_command",fw.lastCommand); put(inner,"time",fw.time);
+        d->setObject(name,inner); inner->release();
+    };
+    firmware("lmac",f.lmac); firmware("umac",f.umac);
+    owner->setProperty("AX201NativeRadioFault",d); d->release();
 }
 
 void ItlIwx::awdlPublishNativeP2pSession(IORegistryEntry *owner) {

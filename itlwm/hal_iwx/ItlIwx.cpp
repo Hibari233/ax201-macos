@@ -10383,7 +10383,10 @@ out:
     if (generation == sc->sc_generation && (sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
 #ifdef ITLWM_AWDL_EXPERIMENTAL
         if (that->awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
-            if (err) that->awdlStop(ItlAwdlRadioError, err);
+            if (err) {
+                that->awdlRecordNativeRadioReset(NativeResetState,err,nstate);
+                that->awdlStop(ItlAwdlRadioError, err);
+            }
             else {
                 sc->sc_newstate(ic, nstate, arg);
                 if (nstate == IEEE80211_S_RUN) that->awdl.session = ItlAwdlListening;
@@ -11194,6 +11197,9 @@ iwx_watchdog(struct _ifnet *ifp)
     if (sc->sc_tx_timer > 0) {
         if (--sc->sc_tx_timer == 0) {
             XYLog("%s: device timeout\n", DEVNAME(sc));
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+            that->awdlRecordNativeRadioReset(NativeResetWatchdog);
+#endif
 #ifdef IWX_DEBUG
             int i;
 
@@ -11364,6 +11370,11 @@ iwx_nic_umac_error(struct iwx_softc *sc)
 {
     struct iwx_umac_error_event_table table;
     uint32_t base;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    auto fault=awdlNativeRadioOwner && awdlActive() && !awdlNativeFault.umac.readStatus ?
+        &awdlNativeFault.umac : nullptr;
+    if (fault) fault->readStatus=1;
+#endif
     
     base = sc->sc_uc.uc_umac_error_event_table;
     
@@ -11373,10 +11384,23 @@ iwx_nic_umac_error(struct iwx_softc *sc)
         return;
     }
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) fault->readStatus=2;
+#endif
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
         XYLog("%s: reading errlog failed\n", DEVNAME(sc));
         return;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) {
+        fault->readStatus=table.valid ? 4 : 3;
+        if (table.valid) {
+            fault->errorId=table.error_id; fault->data1=table.data1;
+            fault->data2=table.data2; fault->data3=table.data3;
+            fault->command=table.cmd_header;
+        }
+    }
+#endif
     
     if (ERROR_START_OFFSET <= table.valid * ERROR_ELEM_SIZE) {
         XYLog("%s: Start UMAC Error Log Dump:\n", DEVNAME(sc));
@@ -11457,6 +11481,11 @@ iwx_nic_error(struct iwx_softc *sc)
 {
     struct iwx_error_event_table table;
     uint32_t base;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    auto fault=awdlNativeRadioOwner && awdlActive() && !awdlNativeFault.lmac.readStatus ?
+        &awdlNativeFault.lmac : nullptr;
+    if (fault) fault->readStatus=1;
+#endif
     
     XYLog("%s: dumping device error log\n", DEVNAME(sc));
     base = sc->sc_uc.uc_lmac_error_event_table[0];
@@ -11466,10 +11495,24 @@ iwx_nic_error(struct iwx_softc *sc)
         return;
     }
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) fault->readStatus=2;
+#endif
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
         XYLog("%s: reading errlog failed\n", DEVNAME(sc));
         return;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) {
+        fault->readStatus=table.valid ? 4 : 3;
+        if (table.valid) {
+            fault->errorId=table.error_id; fault->data1=table.data1;
+            fault->data2=table.data2; fault->data3=table.data3;
+            fault->command=table.hcmd; fault->lastCommand=table.last_cmd_id;
+            fault->time=table.gp2;
+        }
+    }
+#endif
     
     if (!table.valid) {
         XYLog("%s: errlog not found, skipping\n", DEVNAME(sc));
@@ -11752,6 +11795,9 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                              IWX_CT_KILL_NOTIFICATION): {
                 struct iwx_ct_kill_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_ct_kill_notif *);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                awdlRecordNativeRadioReset(NativeResetThermal,le16toh(notif->temperature));
+#endif
                 XYLog("%s: device at critical temperature (%u degC), "
                        "stopping device\n",
                        DEVNAME(sc), le16toh(notif->temperature));
@@ -12112,6 +12158,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     
     if (r1 & IWX_CSR_INT_BIT_RF_KILL) {
         handled |= IWX_CSR_INT_BIT_RF_KILL;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetRfKill,r1,r2);
+#endif
         XYLog("%s RF_KILL has been toggled\n", __FUNCTION__);
         that->iwx_check_rfkill(sc);
         task_add(systq, &sc->init_task);
@@ -12120,6 +12169,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (r1 & IWX_CSR_INT_BIT_SW_ERR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetFirmware,r1,r2);
+#endif
 #if 1 /* usually #ifdef IWX_DEBUG but always enabled for now */
         int i;
         
@@ -12148,6 +12200,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     
     if (r1 & IWX_CSR_INT_BIT_HW_ERR) {
         handled |= IWX_CSR_INT_BIT_HW_ERR;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetHardware,r1,r2);
+#endif
         XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -12232,6 +12287,9 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
     if ((inta_fh & IWX_MSIX_FH_INT_CAUSES_FH_ERR) ||
         (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_SW_ERR) ||
         (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_SW_ERR_V2)) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetFirmware,inta_fh,inta_hw);
+#endif
 #if 1 /* usually #ifdef IWX_DEBUG but always enabled for now */
         int i;
         
@@ -12257,11 +12315,17 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_RF_KILL) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetRfKill,inta_fh,inta_hw);
+#endif
         that->iwx_check_rfkill(sc);
         task_add(systq, &sc->init_task);
     }
     
     if (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_HW_ERR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetHardware,inta_fh,inta_hw);
+#endif
         XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -13989,6 +14053,7 @@ iwx_init_task(void *arg1)
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     if (that->awdlActive()) {
         bool exclusive = !that->awdlLinked();
+        that->awdlRecordNativeRadioReset(NativeResetUnknown);
         that->awdlStop(ItlAwdlRadioError, EIO);
         if (exclusive) return;
     }
@@ -14073,8 +14138,12 @@ iwx_activate(struct iwx_softc *sc, int act)
             break;
         case DVACT_WAKEUP:
             /* Hardware should be up at this point. */
-            if (iwx_set_hw_ready(sc))
+            if (iwx_set_hw_ready(sc)) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                awdlRecordNativeRadioReset(NativeResetWake);
+#endif
                 task_add(systq, &sc->init_task);
+            }
             break;
     }
     

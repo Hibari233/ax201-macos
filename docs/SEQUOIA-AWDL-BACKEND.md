@@ -1050,3 +1050,23 @@ separately and continues returning failure unless all four samples satisfy the
 original 5 ms qualification and restoration checks. A completed measurement
 does not qualify TX or enable native synchronization. The firmware receives
 the same frames and parameters; no warm-up traffic is inserted or hidden.
+## Native radio fault retention
+
+`AX201NativeRadioFault` records the first reset trigger during an explicit
+native radio lease, and publishes it at cleanup. It resets at the next lease,
+not at firmware teardown. `source` is 0 for no observed reset trigger, 1 for
+an otherwise unidentified `init_task`, 2 for a firmware-error interrupt, 3 for
+a hardware-error interrupt, 4 for RF kill, 5 for thermal kill, 6 for the TX
+watchdog, 7 for a state-transition error and 8 for wake failure. `events`
+includes the subsequent generic `init_task` without replacing the first cause.
+Snapshot fields include interrupt/error details, remaining lease time, firmware
+generation, flags, queue positions and pending/submitted counts; no packet,
+address or network identity is copied.
+
+LMAC/UMAC summaries retain only results of error-table reads the driver already
+performs. `read_status` distinguishes not read (0), invalid pointer (1), failed
+read (2), empty (3) and valid (4); a missing UMAC read is not proof of no UMAC
+fault. Only a valid read supplies its error/data/command fields. These hooks
+add no firmware command or MMIO read and do not change reset, timeout, TX or
+lease policy. A host qualification timeout can occur with `source=0` because
+it is not a driver-reset trigger. Native AirDrop remains unimplemented.

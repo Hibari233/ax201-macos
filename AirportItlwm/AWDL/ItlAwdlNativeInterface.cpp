@@ -878,6 +878,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             o->removeProperty("AX201NativePeerWindow");
             o->removeProperty("AX201NativePeerProfile");
             o->removeProperty("AX201NativeP2pRadio");
+            o->removeProperty("AX201NativeRadioFault");
             auto result = r->awdlBegin(o, &begin);
             if (c->tx) c->nextClockHostUs=r->awdlObserveNativeTxDma()+20000;
             if (result) { out->last_error = result; c->finished = true; }
@@ -1006,6 +1007,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             }
             r->awdlPublishNativePeerProfile(o);
             r->awdlPublishNativeP2pSession(o);
+            r->awdlPublishNativeRadioFault(o);
             r->awdlNativeRadioOwner = nullptr;
             r->awdlNativeTxQualification = false;
             r->awdlNativeP2pQualification = false;

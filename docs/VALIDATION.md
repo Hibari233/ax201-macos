@@ -1455,3 +1455,40 @@ found no transmitter entry in 211 observations. Rollback is revision 51.
 Native AirDrop remains unavailable. All recent timing trials stopped after
 the first over-limit frame following radio startup, so they do not yet
 distinguish first-frame initialization cost from persistent per-frame delay.
+
+## Bounded P2P series observation — 2026-10-11
+
+Source `0b724e74d729a4526ca46eee43cf14f1e33fc36d` (revision 53), binary
+`3cc098d42239fb4635d6bc1de6324ab9f3f68a928a1ca05c4070251dd4ad165c`, loaded
+UUID `9D0CB499-EA83-31B6-A0EE-D9238AE7B55E`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38073384205)
+passed all three jobs. Local 13-suite UBSan/five-Python checks, both ABI
+comparisons, the 384-contract baseline and listener/P2P RX regressions passed.
+Rollback is revision 52. Selector 34 permits at most four frames with a 100 ms
+observation ceiling; the original 5 ms qualification and all older selectors
+remain unchanged. An over-limit observation still returns a failing result.
+
+Four unicast frames completed successfully, without retries, at 12 Mbps OFDM.
+Their encoded-clock-to-completion delays were **37,978 / 801 / 1,466 / 1,523 us**.
+Each had 228 us firmware media time. This supports an initial-transmission
+cost rather than a persistent 20–40 ms delay for every frame. It does not
+establish the cause of that startup cost, or measure RF timestamps directly.
+The receiving Mac still found no transmitter entry in 211 observations,
+although its own entry was present in every sample.
+
+The series did **not** pass: the radio stopped with `EIO` before normal lease
+expiry, after all four completions. No pending frame was aborted. P2P state
+and MAC identity restored; WPA2 passed 51/51 pings and GPU/display/power checks
+passed in the same boot with the same native manager. The buffered kernel
+log was no longer available when collected, so the reset trigger is unknown.
+
+A separately archived repeat in the same boot stopped earlier on the 100 ms
+pending-frame timeout, after one submission and no completion. That frame
+had 24,231 us left in the selected peer window; all 84 sampled MAC states were
+awake. This is consistent with, but does not prove, startup delay exhausting
+the peer's receive window. The immediate kernel snapshot had no fatal error
+or device-timeout message. WPA2 passed all nine repeat-harness pings, the
+manager was retained and health checks passed. The original end-of-lease
+reset was not reproduced. Native discovery, RX handoff and AirDrop file
+transfer remain unavailable; reset-cause retention is needed before further
+radio-lifecycle changes can be evaluated reliably.
