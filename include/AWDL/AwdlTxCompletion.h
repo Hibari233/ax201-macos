@@ -4,6 +4,13 @@
 #include "AwdlFrame.h"
 
 namespace ItlAwdl {
+constexpr uint32_t TxQualificationLimitUs = 5000;
+constexpr uint32_t TxSeriesObservationLimitUs = 100000;
+// Series observation can collect later samples after a slow first frame.
+// Qualification always uses the default policy, including in the CLI.
+inline bool txCompletionWithinLimit(uint64_t usec, bool seriesObservation = false) {
+    return usec <= (seriesObservation ? TxSeriesObservationLimitUs : TxQualificationLimitUs);
+}
 struct TxCompletionView { uint16_t status, mediaUs, byteCount, nextSequence; };
 
 inline bool findTxCompletion(const uint8_t *bytes, size_t length, uint16_t queue,

@@ -45,6 +45,7 @@ private:
     static IOReturn nativeRadio(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeP2pRadio(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeP2pUnicastTx(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeP2pTxSeries(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeSyncTx(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeUnicastTx(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTransport(OSObject *, void *, IOExternalMethodArguments *);

@@ -1031,3 +1031,22 @@ as MAC and firmware generation; an unrelated START cannot open the TX gate.
 The selected profile is recorded numerically. This controlled comparison
 changes neither timing limits nor the transmitted frame and does not presume
 that a different protection profile resolves the measured delay.
+
+### First-frame versus subsequent-frame observation
+
+Root-only selector 34 / capability bit 8388608 adds `p2p-tx-series[-selftest]`
+to distinguish radio-startup cost from persistent TX delay. It can observe at
+most four fixed owned-peer MIFs within the existing 1000–5000 ms lease. It
+preserves the validated P2P configuration, current-generation START, regulatory
+map, recent peer RX, clock/window/NAV checks, minimum spacing and one-pending
+limit. Firmware failure or invalid timing stops collection. A pending or
+completed sample beyond 100 ms also stops the observation and tears down the
+exclusive radio lease.
+
+The existing qualification selectors still stop above 5 ms. Only this explicit
+observation selector may collect another sample after a slower successful
+completion. The CLI reports `series_observation` and `timing_qualified`
+separately and continues returning failure unless all four samples satisfy the
+original 5 ms qualification and restoration checks. A completed measurement
+does not qualify TX or enable native synchronization. The firmware receives
+the same frames and parameters; no warm-up traffic is inserted or hidden.

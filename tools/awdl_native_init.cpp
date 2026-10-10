@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Root-only native ABI/lifecycle checks and bounded receive-only qualification.
+// Root-only native ABI/lifecycle checks and bounded radio diagnostics.
 #include <IOKit/IOKitLib.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <AWDL/ItlAwdlABI.h>
+#include <AWDL/AwdlTxCompletion.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -364,8 +365,9 @@ static kern_return_t radioInvoke(io_connect_t client, const ItlAwdlBeginRequest 
     if (!result && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION)) return kIOReturnBadArgument;
     return result;
 }
-static int radioInvalidRequests(io_connect_t client, bool transmit = false, bool unicast = false, bool p2p = false) {
-    const uint32_t method = p2p ? (transmit ? ItlAwdlNativeP2pUnicastTx : ItlAwdlNativeP2pRadio) :
+static int radioInvalidRequests(io_connect_t client, bool transmit = false, bool unicast = false,
+    bool p2p = false, bool seriesObservation = false) {
+    const uint32_t method = seriesObservation ? ItlAwdlNativeP2pTxSeries : p2p ? (transmit ? ItlAwdlNativeP2pUnicastTx : ItlAwdlNativeP2pRadio) :
         (unicast ? ItlAwdlNativeUnicastTx : (transmit ? ItlAwdlNativeSyncTx : ItlAwdlNativeRadio));
     const size_t responseSize = transmit ? sizeof(ItlAwdlNativeSyncTxResponse) : sizeof(ItlAwdlNativeRadioResponse);
     unsigned passed = 0, failed = 0;
@@ -441,10 +443,12 @@ static int radioRun(io_connect_t client, const ItlAwdlBeginRequest &request, boo
     printRadio(out,!p2p); printf("\n");
     return radioOkay(out) ? 0 : 1;
 }
-static int syncTxRun(io_connect_t client, const ItlAwdlBeginRequest &request, bool unicast = false, bool p2p = false) {
+static int syncTxRun(io_connect_t client, const ItlAwdlBeginRequest &request, bool unicast = false,
+    bool p2p = false, bool seriesObservation = false) {
     ItlAwdlNativeSyncTxResponse out = {};
     size_t size = sizeof(out);
-    const auto method = p2p ? ItlAwdlNativeP2pUnicastTx : (unicast ? ItlAwdlNativeUnicastTx : ItlAwdlNativeSyncTx);
+    const auto method = seriesObservation ? ItlAwdlNativeP2pTxSeries : p2p ? ItlAwdlNativeP2pUnicastTx :
+        (unicast ? ItlAwdlNativeUnicastTx : ItlAwdlNativeSyncTx);
     auto result = IOConnectCallStructMethod(client,method,&request,sizeof(request),&out,&size);
     if (result) { fprintf(stderr,"Native sync TX request: 0x%x\n",result); return 1; }
     if (size!=sizeof(out) || out.radio.version!=ITL_AWDL_ABI_VERSION) return 1;
@@ -455,11 +459,14 @@ static int syncTxRun(io_connect_t client, const ItlAwdlBeginRequest &request, bo
     FIELD(first_counter); FIELD(last_counter); FIELD(windows_used); FIELD(min_rate_mbps);
     FIELD(last_rate_flags); FIELD(limit); FIELD(last_firmware_status);
 #undef FIELD
-    printf("\"unicast\":%s,\"p2p_device\":%s,\"rf_observed\":false,\"native_airdrop\":false}\n",
-        unicast ? "true" : "false", p2p ? "true" : "false");
-    return radioOkay(out.radio) && out.limit==4 && out.submitted==4 && out.completed==4 &&
+    const bool qualified = radioOkay(out.radio) && out.limit==4 && out.submitted==4 && out.completed==4 &&
         out.succeeded==4 && !out.failed && !out.pending && !out.aborted && out.timing_samples==4 &&
-        !out.timing_invalid && out.max_completion_delay_us<=5000 && out.windows_used==4 ? 0 : 1;
+        !out.timing_invalid && ItlAwdl::txCompletionWithinLimit(out.max_completion_delay_us) && out.windows_used==4;
+    printf("\"unicast\":%s,\"p2p_device\":%s,\"series_observation\":%s,\"timing_qualified\":%s,"
+        "\"rf_observed\":false,\"native_airdrop\":false}\n",
+        unicast ? "true" : "false", p2p ? "true" : "false", seriesObservation ? "true" : "false",
+        qualified ? "true" : "false");
+    return qualified ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
@@ -487,6 +494,8 @@ int main(int argc, char **argv) {
     const bool unicastRequest = argc == 4 && !strcmp(argv[1], "sync-unicast");
     const bool p2pUnicastSelftest = argc == 2 && !strcmp(argv[1], "p2p-sync-unicast-selftest");
     const bool p2pUnicastRequest = argc == 4 && !strcmp(argv[1], "p2p-sync-unicast");
+    const bool seriesSelftest = argc == 2 && !strcmp(argv[1], "p2p-tx-series-selftest");
+    const bool seriesRequest = argc == 4 && !strcmp(argv[1], "p2p-tx-series");
     ItlAwdlBeginRequest radioInput = {ITL_AWDL_ABI_VERSION,0,0,0,{},{}};
     uint32_t configureOperation = ItlAwdlConfigureInspect;
     if (configure || templateRequest || timingRequest) {
@@ -501,8 +510,8 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !p2pRadioSelftest && !p2pRadioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest && !p2pUnicastSelftest && !p2pUnicastRequest) ||
-        ((radioRequest || p2pRadioRequest || syncTxRequest || unicastRequest || p2pUnicastRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
+         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !p2pRadioSelftest && !p2pRadioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest && !p2pUnicastSelftest && !p2pUnicastRequest && !seriesSelftest && !seriesRequest) ||
+        ((radioRequest || p2pRadioRequest || syncTxRequest || unicastRequest || p2pUnicastRequest || seriesRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
                          radioInput.dwell_ms < 1000 || radioInput.dwell_ms > 5000)) ||
         ((configure || templateRequest || timingRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
@@ -521,6 +530,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init sync-tx-selftest | sync-tx OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "       awdl_native_init sync-unicast-selftest | sync-unicast OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "       awdl_native_init p2p-sync-unicast-selftest | p2p-sync-unicast OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
+                        "       awdl_native_init p2p-tx-series-selftest | p2p-tx-series OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
         return 2;
     }
@@ -554,6 +564,8 @@ int main(int argc, char **argv) {
     if (unicastRequest) { int code = syncTxRun(client,radioInput,true); IOServiceClose(client); return code; }
     if (p2pUnicastSelftest) { int code = radioInvalidRequests(client,true,true,true); IOServiceClose(client); return code; }
     if (p2pUnicastRequest) { int code = syncTxRun(client,radioInput,true,true); IOServiceClose(client); return code; }
+    if (seriesSelftest) { int code = radioInvalidRequests(client,true,true,true,true); IOServiceClose(client); return code; }
+    if (seriesRequest) { int code = syncTxRun(client,radioInput,true,true,true); IOServiceClose(client); return code; }
     if (radioSelftest) { int code = radioInvalidRequests(client); IOServiceClose(client); return code; }
     if (radioRequest) { int code = radioRun(client, radioInput); IOServiceClose(client); return code; }
     if (p2pRadioSelftest) { int code = radioInvalidRequests(client,false,false,true); IOServiceClose(client); return code; }

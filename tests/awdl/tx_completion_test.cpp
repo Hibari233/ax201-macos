@@ -9,6 +9,11 @@
 using namespace ItlAwdl;
 
 int main() {
+    assert(txCompletionWithinLimit(5000) && !txCompletionWithinLimit(5001));
+    // Observing a slow first frame must never change its qualification.
+    assert(txCompletionWithinLimit(22663,true) && !txCompletionWithinLimit(22663));
+    assert(txCompletionWithinLimit(100000,true) && !txCompletionWithinLimit(100001,true));
+    assert(!txCompletionWithinLimit(UINT64_MAX,true));
     const uint8_t native[6] = {2,1,2,3,4,5};
     uint8_t cts[10] = {0xc4,0,0x40,0x1f,2,6,7,8,9,10}; // 8000 us
     ObservedReservation nav;

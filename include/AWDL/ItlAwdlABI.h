@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlNativeUnicastTx, ItlAwdlNativeP2pRadio, ItlAwdlNativeP2pUnicastTx, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlNativeUnicastTx, ItlAwdlNativeP2pRadio, ItlAwdlNativeP2pUnicastTx, ItlAwdlNativeP2pTxSeries, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -279,7 +279,8 @@ static_assert(ItlAwdlNativeSyncTx == 29, "append-only native sync TX ABI");
 static_assert(sizeof(ItlAwdlNativeSyncTxResponse) == 224, "native sync TX response ABI");
 static_assert(ItlAwdlNativeUnicastTx == 31, "append-only native unicast TX ABI");
 static_assert(ItlAwdlNativeP2pRadio == 32, "append-only native P2P radio ABI");
-static_assert(ItlAwdlNativeP2pUnicastTx == 33 && ItlAwdlMethodCount == 34, "append-only native P2P TX ABI");
+static_assert(ItlAwdlNativeP2pUnicastTx == 33, "append-only native P2P TX ABI");
+static_assert(ItlAwdlNativeP2pTxSeries == 34 && ItlAwdlMethodCount == 35, "append-only native P2P TX series ABI");
 static_assert(ItlAwdlNativeTiming == 30, "append-only native timing ABI");
 static_assert(sizeof(ItlAwdlNativeTimingResponse) == 376, "native timing response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");

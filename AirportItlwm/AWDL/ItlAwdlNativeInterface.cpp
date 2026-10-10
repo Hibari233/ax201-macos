@@ -5,6 +5,7 @@
 #include "AirportItlwmV2.hpp"
 #include <Airport/macOS15/IO80211ManagementBuffer.h>
 #include <AWDL/AwdlNativeFrame.h>
+#include <AWDL/AwdlTxCompletion.h>
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
 #include <libkern/c++/OSSymbol.h>
@@ -778,11 +779,12 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
 
 IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out, ItlAwdlNativeSyncTxResponse *tx,
-    bool unicast, bool p2p) {
+    bool unicast, bool p2p, bool seriesObservation) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
         request->channel || request->reserved || request->padding[0] || request->padding[1] ||
         request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer) ||
-        (tx && out != &tx->radio) || (unicast && !tx) || (p2p && tx && !unicast))
+        (tx && out != &tx->radio) || (unicast && !tx) || (p2p && tx && !unicast) ||
+        (seriesObservation && (!tx || !p2p || !unicast)))
         return kIOReturnBadArgument;
     if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
     auto gate = radio->getMainCommandGate();
@@ -800,7 +802,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         uint32_t phase; int generation; bool finished;
         ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
         uint64_t nextClockHostUs;
-        bool timelineReady, sentWindow, unicast, p2p; uint16_t lastWindow;
+        bool timelineReady, sentWindow, unicast, p2p, seriesObservation; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
         uint32_t alignedSamples, alignmentUnavailable, navDeferrals, maxNavRemainingUs;
         uint32_t macIdBefore, macIdDuring, macIdAfter, macContextSamples, macContextMismatches;
@@ -810,6 +812,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     call.out = out; call.generation = -1; call.tx = tx;
     call.unicast = unicast;
     call.p2p = p2p;
+    call.seriesObservation = seriesObservation;
     auto action = [](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
         auto c = static_cast<Call *>(argument);
         auto r = c->radio;
@@ -916,6 +919,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             }
             if (c->tx) {
                 const auto now=r->awdlObserveNativeTxDma();
+                if (c->seriesObservation && s.tx.pending && (!s.lastProbeUs || now<s.lastProbeUs ||
+                    !ItlAwdl::txCompletionWithinLimit(now-s.lastProbeUs,true))) {
+                    out->last_error=kIOReturnTimeout; c->finished=true; return kIOReturnSuccess;
+                }
                 if (now<c->nextClockHostUs) return kIOReturnSuccess;
                 c->nextClockHostUs=now+20000;
             }
@@ -963,14 +970,15 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                     if (navRemaining > c->maxNavRemainingUs) c->maxNavRemainingUs = navRemaining;
                 }
                 if (c->tx && length) {
-                    // Bound a qualification to four PSFs and one pending TX.
+                    // Bound both modes to four frames and one pending TX.
                     // Transmit only inside a selected-channel EAW, with time
                     // left for firmware submission. The diagnostic does not
                     // claim actual native synchronization has been enabled.
                     const uint16_t window = boundary.counter / uint8_t(o->presenceMode);
                     if (s.tx.failed) {
                         out->last_error = kIOReturnIOError; c->finished = true;
-                    } else if (r->awdlNativeTimingInvalid || r->awdlNativeMaxCompletionUs > 5000) {
+                    } else if (r->awdlNativeTimingInvalid || !ItlAwdl::txCompletionWithinLimit(
+                        r->awdlNativeMaxCompletionUs,c->seriesObservation)) {
                         out->last_error = kIOReturnTimeout; c->finished = true;
                     } else if (s.tx.submitted < 4 && !s.tx.pending &&
                         (!c->sentWindow || window != c->lastWindow) && overlap && !navRemaining) {
@@ -1043,6 +1051,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 put("mac_id_after", c->macIdAfter); put("mac_context_samples", c->macContextSamples);
                 put("mac_context_mismatches", c->macContextMismatches);
                 put("selected_channel", out->channel);
+                put("tx_series_observation", c->seriesObservation);
                 put("last_peer_channel", c->lastPeerWindow.channel);
                 put("last_peer_counter", c->lastPeerWindow.counter);
                 put("last_peer_elapsed_us", c->lastPeerWindow.elapsedUs);
