@@ -1398,3 +1398,32 @@ regression and P2P tests; GPU/display/power checks passed in the same boot.
 This establishes a bounded P2P receive lifecycle on this firmware, not native
 peer discovery or AirDrop. P2P transmission timing remains untested; native
 SYNC, RX handoff and file transfer remain disabled.
+
+## P2P-device unicast timing — 2026-10-11
+
+Source `7e24228d6c6bde6e1c4ef92a311fa832c0463459` (revision 51), binary
+`c1f3b855ffeec342870cd819a31d90dc45a1dbfbe864b8e3d9ef63bf364aa8e6`, loaded
+UUID `F4824E5F-1322-37EB-A0FF-C520313743FD`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38071790203)
+passed all three jobs. Local 13-suite UBSan/five-Python checks, both ABI
+comparisons, the 384-contract baseline, listener regression and two P2P RX
+leases passed. The new selector rejected 12 malformed requests and an active
+STA; the old unicast/broadcast selector rejection checks also passed.
+
+The P2P unicast trial received a successful session START and submitted one
+frame. Firmware reported success, 12 Mbps OFDM and 396 us media duration,
+with zero RTS/frame failures or Bluetooth kills. Completion was **28,900 us**
+after the encoded clock value (28,828 us after the doorbell), so the unchanged
+5 ms guard stopped the trial. The first matching RX batch reached the interrupt
+filter at 28,744 us; all 20 sampled MAC states were awake. There was no decoded
+ACK observation in this P2P trial, so it does not provide the listener trials'
+independent ACK timestamp. Four management frames were delivered before stop;
+their largest decoded NAV was zero, which does not measure channel energy.
+
+P2P session state and MAC identity restored, the native manager was retained,
+WPA2 passed 51/51 pings and GPU/display/power checks passed. One SSH control
+connection timed out, but a fresh connection confirmed the same boot and
+completed detached harness. The receiving Mac reported no transmitter entry
+in 211 read-only observations. P2P-device selection alone has not resolved
+the timing failure or established native discovery. Rollback is revision 50;
+native synchronization, RX handoff and AirDrop transfers remain disabled.
