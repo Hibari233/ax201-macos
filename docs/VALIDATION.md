@@ -180,6 +180,39 @@ Only initialization and disposal are qualified here. `start()` remains disabled:
 there is no started peer manager, native BSD interface, new radio operation or
 AirDrop file-transfer result.
 
+## Revision 13 native start probe: incomplete validation (2026-10-10)
+
+The same machine loaded `79804b320be7a41332cd82c19613ccef8e0e237b`:
+
+- Binary SHA-256: `404e163580e614995b3e1e17a930896e178afdd2cf14387a2de686c54f325265`
+- Loaded UUID: `F32024F3-757A-3532-AAD9-4C794C11ABBD`
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38033111513)
+  passed all three jobs. The compiled class still matched 560 native vtable
+  slots and 63 backend methods.
+- Sixteen malformed initialization/start requests passed; non-root access was
+  denied after successful root access to this loaded driver.
+
+One deliberately failed peer creation and one successful native start/stop
+passed, including the wait for deferred native release. The successful cycle
+created and released one `IO80211AWDLPeerManager`. Both paths ended with zero
+interface/peer-manager instances, no controller open or AWDL pointer, no
+remaining audited log/MAC resources and no BSD interface. The backend request
+count was zero, so this is not a qualification of any firmware request.
+
+Four consecutive deliberately failed peer creations then passed. **During the
+following four-cycle normal-start request, the management connection was lost**;
+neither completion nor post-test health was available. IPv4 and IPv6 SSH both
+failed afterwards. A kernel crash has not yet been confirmed from a panic
+report. Repeated normal start/stop is therefore **not qualified**, and the
+planned concurrent-client and final Wi-Fi checks did not complete. Revision 12
+is retained for rollback. These probes are never started automatically at boot.
+
+An earlier build (`ec266b1`) returned before native interface release settled;
+the successful single-start trial's following userspace count was zero at
+11 ms. Revision 13's outside-gate wait addresses that observation, but it does
+not establish the cause of the later connection loss. Native packet queues,
+BSD registration and AirDrop transfers remain unimplemented.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |
@@ -193,6 +226,7 @@ AirDrop file-transfer result.
 | Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
 | Native role-6 object initialization/disposal | 27 bounded cycles passed; start, queues and BSD registration still pending |
+| Native role-6 start/stop | Single cycle passed; repeated normal startup lost connectivity, unresolved |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |
