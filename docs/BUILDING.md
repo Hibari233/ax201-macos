@@ -21,6 +21,10 @@ synthetic frame boundaries, mutated inputs, clock wrapping, schedule prediction,
 regulatory decisions and offline decoding using ASan/UBSan. It does not contact a
 device. `--no-sanitizers` is available for hosts lacking those runtimes, but is
 not equivalent to the sanitizer run.
+If ASan itself cannot initialize on a host, `--sanitizers undefined` can run
+UBSan alone. Report that distinction; a hung or skipped ASan run is not a pass.
+Each test executable has a 60-second timeout, configurable with
+`--timeout-seconds` for slower test hosts.
 
 ## Outputs
 

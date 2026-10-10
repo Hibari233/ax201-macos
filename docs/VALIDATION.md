@@ -32,6 +32,18 @@ is automatically started by building or running the offline tests.
 
 ## Reproducible checks in this repository
 
+Initial local check on 2026-10-10:
+
+- Commit `06511578efd36c38af2b39fca3014d225401f3d1`: both Sequoia variants compiled
+  with Apple Clang 17 and passed ad-hoc signature verification. The Wi-Fi variant
+  compiled 74 sources; the AWDL variant compiled 76. Symbol inspection confirmed
+  the experimental user client is absent from Wi-Fi and present in AWDL.
+- The compile-only native ABI fixture and x86_64 diagnostic client built.
+- Both 200,000-case mutation suites and all 5 Python decoder tests passed under
+  local UBSan. The local ASan runtime did not finish starting; that run was
+  stopped and is **not a pass**. Linux CI runs the combined ASan/UBSan suite.
+- Neither newly built kext was installed as part of repository preparation.
+
 `python3 scripts/test.py` exercises synthetic frame parsing, corrupted/truncated
 inputs, channel-sequence decoding, timestamp wrapping, schedule projection and
 regulatory checks under ASan/UBSan. GitHub Actions also compiles both Sequoia
