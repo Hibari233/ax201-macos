@@ -733,13 +733,18 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
 }
 
 size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *frame, size_t capacity,
-    const ItlAwdl::LocalSyncBoundary *boundary, uint16_t sequence) {
+    const ItlAwdl::LocalSyncBoundary *boundary, uint16_t sequence, const uint8_t *unicastPeer) {
     // Without a boundary this is a CPU-only encoding specimen. A supplied
     // local-master timeline is used only by explicit bounded qualification;
     // it does not represent an enabled native peer-manager synchronization.
     ItlAwdl::SyncActionContext context = {};
     memcpy(context.source, selfAddress.ether_addr_octet, 6);
     memset(context.destination, 0xff, 6);
+    if (unicastPeer) {
+        if (!ItlAwdl::unicastMac(unicastPeer)) return 0;
+        memcpy(context.destination, unicastPeer, 6);
+        context.subtype = 3; // MIF; broadcast qualification remains PSF.
+    }
     context.clockValid = true;
     context.phyTimeUs = context.targetTimeUs = gp2;
     context.sequence = sequence;
@@ -772,11 +777,12 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
 }
 
 IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
-    const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out, ItlAwdlNativeSyncTxResponse *tx) {
+    const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out, ItlAwdlNativeSyncTxResponse *tx,
+    bool unicast) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
         request->channel || request->reserved || request->padding[0] || request->padding[1] ||
         request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer) ||
-        (tx && out != &tx->radio))
+        (tx && out != &tx->radio) || (unicast && !tx))
         return kIOReturnBadArgument;
     if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
     auto gate = radio->getMainCommandGate();
@@ -794,13 +800,14 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         uint32_t phase; int generation; bool finished;
         ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
         uint64_t nextClockHostUs;
-        bool timelineReady, sentWindow; uint16_t lastWindow;
+        bool timelineReady, sentWindow, unicast; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
         uint32_t alignedSamples, alignmentUnavailable;
         ItlAwdl::PeerTxWindow lastPeerWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
     call.out = out; call.generation = -1; call.tx = tx;
+    call.unicast = unicast;
     auto action = [](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
         auto c = static_cast<Call *>(argument);
         auto r = c->radio;
@@ -915,7 +922,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 else ++c->alignmentUnavailable;
                 uint8_t frame[ItlAwdl::SyncActionMaxLength];
                 auto length = o->encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame),
-                    &boundary,uint16_t(s.tx.submitted));
+                    &boundary,uint16_t(s.tx.submitted),c->unicast ? c->request->peer : nullptr);
                 if (!length) { out->last_error = kIOReturnError; c->finished = true; }
                 else { ++out->encoded; out->encoded_length = uint32_t(length); }
                 const bool overlap = aligned && peerResult == ItlAwdl::PeerWindowResult::Ready &&
@@ -934,7 +941,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                         out->last_error = kIOReturnTimeout; c->finished = true;
                     } else if (s.tx.submitted < 4 && !s.tx.pending &&
                         (!c->sentWindow || window != c->lastWindow) && overlap) {
-                        auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us);
+                        auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us,c->unicast);
                         if (!sent) {
                             if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
                             c->tx->last_counter = boundary.counter; ++c->tx->windows_used;

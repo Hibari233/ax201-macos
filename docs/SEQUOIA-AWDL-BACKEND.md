@@ -6,6 +6,24 @@ No Apple binaries or disassembly are distributed here. Addresses identify the
 observed unslid symbols; they are not runtime patch targets. None of these
 observations establish a functioning native interface.
 
+## Owned-peer unicast qualification
+
+Selector 31 / capability bit 1048576 uses the existing begin request and
+224-byte TX response. `sync-unicast-selftest` checks malformed requests;
+`sync-unicast OWNED_PEER_MAC 3000` runs a separate bounded MIF transmission.
+Only the selected, recently heard peer can be the receiver. The HAL checks its
+address again before submission, along with subtype 3, the native sender and
+AWDL BSSID. Broadcast selector 29 continues to use PSF/subtype 0.
+
+This mode retains the same coherent peer clock, shared channel window,
+regulatory checks, one pending frame, four-frame limit, and 5 ms completion
+guard. It does not accept arbitrary frames or enable the native interface.
+The trace identifies unicast mode and records raw firmware status/retry counts.
+An addressed management action permits inspecting firmware acknowledgement
+behavior, unlike a broadcast. Firmware success alone still does not prove
+native AWDL acceptance, correct on-air timestamps, or AirDrop functionality.
+No legacy TX ACK flag is inserted into the incompatible gen3 command format.
+
 ## Lifecycle
 
 `IO80211VirtualInterface::createPeerManager()` at `0xffffff80022a4926`

@@ -46,7 +46,8 @@ public:
     static IOReturn probeTiming(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTimingResponse *);
     static IOReturn probeRadio(AirportItlwm *, ItlIwx *,
-        const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr);
+        const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr,
+        bool unicast = false);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -132,7 +133,8 @@ private:
     uint32_t bsdEnableCalls, bsdEnableDenied;
     void describeBSD(ItlAwdlNativeBSDResponse *);
     size_t encodeQualificationFrame(uint32_t, uint8_t *, size_t,
-        const ItlAwdl::LocalSyncBoundary * = nullptr, uint16_t sequence = 0);
+        const ItlAwdl::LocalSyncBoundary * = nullptr, uint16_t sequence = 0,
+        const uint8_t *unicastPeer = nullptr);
     IOReturn prepareTransport(IOWorkLoop *, uint32_t);
     IOReturn clearTransport(bool systemStop = false);
     void describeTransport(ItlAwdlNativeTransportResponse *);

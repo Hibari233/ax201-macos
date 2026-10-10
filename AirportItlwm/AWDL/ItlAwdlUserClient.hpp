@@ -44,6 +44,7 @@ private:
     static IOReturn nativeTiming(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeRadio(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeSyncTx(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeUnicastTx(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTransport(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeQueues(OSObject *, void *, IOExternalMethodArguments *);
 };

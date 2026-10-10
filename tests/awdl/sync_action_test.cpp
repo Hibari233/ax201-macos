@@ -68,6 +68,26 @@ int main() {
     assert(encodeNativeActionMetadata(c.source, rx, &metadata));
     assert(nativeActionView(out, n, metadata.bytes, sizeof(metadata), &view));
 
+    // A valid wire unicast is not permission to send to an arbitrary address.
+    // Bind MIF qualification to exactly the selected peer, while PSF remains
+    // broadcast. Validate the emitted header as well as the HAL's guard.
+    const uint8_t broadcast[6] = {255,255,255,255,255,255}, zero[6] = {};
+    assert(syncQualificationDestination(c.destination,c.destination,true));
+    assert(!syncQualificationDestination(c.source,c.destination,true));
+    assert(!syncQualificationDestination(broadcast,c.destination,true));
+    assert(!syncQualificationDestination(c.destination,c.destination,false));
+    assert(syncQualificationDestination(broadcast,c.destination,false));
+    assert(!syncQualificationDestination(nullptr,c.destination,true));
+    assert(!syncQualificationDestination(broadcast,nullptr,false));
+    assert(!syncQualificationDestination(broadcast,broadcast,false));
+    assert(!syncQualificationDestination(broadcast,zero,false));
+    auto mif = c; mif.subtype = 3;
+    assert(buildSyncAction(mif,s,extra,network,out,sizeof(out)) == n);
+    assert(out[0] == 0xd0 && out[30] == 3 && equalMac(out+4,c.destination));
+    assert(syncQualificationDestination(out+4,c.destination,true));
+    assert(parseAction(out,n,&action) == ParseResult::Valid);
+    assert(parseSchedule(out,n,&sync) == ScheduleResult::Valid);
+
     auto rejected = [&](const SyncActionContext &bc, const SyncActionParameters &bs, const ActionTemplate &bt) {
         memset(out, 0xa5, sizeof(out));
         assert(!buildSyncAction(bc, bs, bt, network, out, sizeof(out)));

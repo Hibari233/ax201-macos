@@ -191,7 +191,7 @@ private:
         uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
         uint16_t peerWindowCounter;
         uint8_t peerWindowChannel;
-        bool completed, clockValid, dmaProbeSupported;
+        bool completed, clockValid, dmaProbeSupported, unicast;
     } awdlNativeTrace[4] = {};
     uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;
     void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -251,7 +251,7 @@ private:
     IOReturn awdlProbe(OSObject *, bool scheduled = false);
     IOReturn awdlDataProbe(OSObject *, const ItlAwdlDataProbeRequest *);
     IOReturn awdlTransmitGuard(OSObject *, bool data, bool scheduled, bool native = false);
-    IOReturn awdlSubmitNativeSync(OSObject *, const uint8_t *, size_t, uint32_t);
+    IOReturn awdlSubmitNativeSync(OSObject *, const uint8_t *, size_t, uint32_t, bool unicast = false);
     IOReturn awdlSubmitDiagnostic(const uint8_t *, size_t);
     IOReturn awdlReadClock(ItlAwdlClockResponse *);
     IOReturn awdlRun(OSObject *, const ItlAwdlRunRequest *);

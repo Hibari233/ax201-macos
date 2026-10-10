@@ -41,7 +41,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 1048575; // Adds disabled native timing round-trip diagnostic. No native AirDrop.
+            out->capabilities = 2097151; // Adds bounded owned-peer unicast MIF diagnostic. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -450,7 +450,8 @@ IOReturn ItlIwx::awdlSubmitDiagnostic(const uint8_t *bytes, size_t length) {
     return kIOReturnSuccess;
 }
 
-IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, size_t length, uint32_t gp2) {
+IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, size_t length, uint32_t gp2,
+    bool unicast) {
     auto result = awdlTransmitGuard(owner, false, false, true);
     if (result) return result;
     ItlAwdl::ActionInfo action = {};
@@ -458,10 +459,10 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     if (!bytes || length > ItlAwdl::SyncActionMaxLength ||
         ItlAwdl::parseAction(bytes,length,&action) != ItlAwdl::ParseResult::Valid ||
         ItlAwdl::parseSchedule(bytes,length,&sync) != ItlAwdl::ScheduleResult::Valid ||
-        bytes[30] != 0 || !ItlAwdl::equalMac(bytes+10,awdlNativeAddress) ||
+        bytes[30] != (unicast ? 3 : 0) || !ItlAwdl::equalMac(bytes+10,awdlNativeAddress) ||
         !ItlAwdl::equalMac(bytes+16,ItlAwdl::DefaultAwdlBssid) || action.phy_tx != gp2)
         return kIOReturnBadArgument;
-    for (unsigned i=0;i<6;++i) if (bytes[4+i]!=0xff) return kIOReturnBadArgument;
+    if (!ItlAwdl::syncQualificationDestination(bytes+4,awdl.peer,unicast)) return kIOReturnBadArgument;
     ItlAwdlClockResponse clock = {};
     result = awdlReadClock(&clock);
     const auto age = ItlAwdl::clockDelta(clock.gp2_us,gp2);
@@ -482,6 +483,7 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     bzero(&trace,sizeof(trace));
     trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
     trace.packetLength = uint32_t(length);
+    trace.unicast = unicast;
     trace.freshHostUs = clock.host_end_us;
     trace.peerWindowElapsedUs = peerWindow.elapsedUs;
     trace.peerWindowRemainingUs = peerWindow.remainingUs;
@@ -564,6 +566,7 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
             if (number) { entry->setObject(key,number); number->release(); }
         };
         put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
+        put("unicast",t.unicast);
         put("qid",t.qid); put("index",t.index);
         put("command_offload_assist",t.commandOffloadAssist);
         put("command_header_length",t.commandHeaderLength);

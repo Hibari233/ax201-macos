@@ -38,6 +38,14 @@ inline bool syncActionDestination(const uint8_t *address) {
     for (unsigned i = 0; i < 6; ++i) if (address[i] != 0xff) return false;
     return true;
 }
+// Qualification may address only its selected, recently heard unicast peer,
+// or broadcast in the separate PSF mode. This is stricter than wire encoding.
+inline bool syncQualificationDestination(const uint8_t *address, const uint8_t *peer, bool unicast) {
+    if (!address || !peer || !unicastMac(peer)) return false;
+    if (unicast) return equalMac(address, peer);
+    for (unsigned i = 0; i < 6; ++i) if (address[i] != 0xff) return false;
+    return true;
+}
 inline bool equalChannelPlan(const ChannelPlan &a, const ChannelPlan &b) {
     if (a.encoding != b.encoding || a.step_aw != b.step_aw) return false;
     for (unsigned i = 0; i < ScheduleLength; ++i)
