@@ -816,3 +816,25 @@ scheduling, and qualify live BSD teardown and native RX metadata before
 enabling radio transport. Default capability
 bits must continue to describe the implemented Wi-Fi driver, not an unverified
 AirDrop service.
+
+### Synchronization TX timing attribution
+
+Revision 35's first native-template TX completion exceeded the qualification
+limit. The next instrumentation keeps that limit and the four-frame bound.
+After a TX trial, `AX201NativeTxTiming` on the retained native interface holds
+up to four records containing preparation-to-doorbell, doorbell-to-return,
+doorbell-to-completion and notification-batch timing. Existing GP2 samples are
+compared with monotonic host-clock intervals. A doorbell stamp is taken just
+before the existing MMIO write, without another peripheral lock/read.
+
+An atomic flag arms a lock-free timestamp in the existing interrupt filter only
+while a qualification transmission is outstanding. The gated RX handler saves
+that batch's filter timestamp before processing its notifications. These are
+**batch** timestamps, not proof of which interrupt caused a TX response; absent
+or out-of-order interval fields must not be treated as zero latency. Firmware
+media duration, retry counts and Bluetooth blocking counts are reported
+separately. No interval is represented as an actual on-air TX timestamp.
+
+Records are published after radio stop, contain no payloads or peer identities,
+and are cleared at the next accepted native TX trial. No user-client ABI,
+native interface enablement, firmware settings or timing threshold changes.

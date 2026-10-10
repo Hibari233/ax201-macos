@@ -281,6 +281,7 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
 
 void ItlIwx::awdlStop(uint32_t reason, uint32_t error) {
     if (!awdlActive()) return;
+    __atomic_store_n(&awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
     awdl.session = ItlAwdlStopping;
     ++awdl.epoch;
     awdl.run.active = 0;
@@ -468,7 +469,77 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     // submission. Completion samples a conservative delay bound, never an
     // invented on-air timestamp. The monitor uses the native source MAC/rate.
     awdlNativeTxGp2 = gp2;
-    return awdlSubmitDiagnostic(bytes,length);
+    const auto index = awdl.tx.submitted;
+    if (index >= nitems(awdlNativeTrace)) return kIOReturnNoSpace;
+    auto &trace = awdlNativeTrace[index];
+    bzero(&trace,sizeof(trace));
+    trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
+    trace.freshHostUs = clock.host_end_us;
+    awdlNativeTraceIndex = index; awdlNativeTraceCount = index + 1;
+    __atomic_store_n(&awdlNativeFilterAbsolute, uint64_t(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&awdlNativeTraceArmed, uint32_t(1), __ATOMIC_RELEASE);
+    result = awdlSubmitDiagnostic(bytes,length);
+    trace.returnHostUs = awdlNowUs();
+    trace.hostError = result;
+    return result;
+}
+
+void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index) {
+    if (!awdlNativeTxQualification || !awdlNativeRadioOwner ||
+        awdlNativeTraceIndex >= awdlNativeTraceCount || awdlNativeTraceIndex >= nitems(awdlNativeTrace)) return;
+    auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+    trace.qid = qid; trace.index = index;
+    // Host clock immediately before the existing MMIO write, not an on-air
+    // timestamp. Do not add another peripheral read/lock to the hot TX path.
+    trace.doorbellHostUs = awdlNowUs();
+}
+
+void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
+    if (!owner) return;
+    auto records = OSArray::withCapacity(nitems(awdlNativeTrace));
+    if (!records) return;
+    for (uint32_t i=0;i<awdlNativeTraceCount && i<nitems(awdlNativeTrace);++i) {
+        const auto &t = awdlNativeTrace[i];
+        auto entry = OSDictionary::withCapacity(20);
+        if (!entry) break;
+        auto put = [&](const char *key, uint64_t value) {
+            auto number = OSNumber::withNumber(value,64);
+            if (number) { entry->setObject(key,number); number->release(); }
+        };
+        put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
+        put("qid",t.qid); put("index",t.index);
+        put("host_error",t.hostError); put("firmware_status",t.firmwareStatus);
+        put("firmware_media_us",t.mediaUs); put("bluetooth_kills",t.btKill);
+        put("rts_failures",t.rtsFailures); put("frame_failures",t.frameFailures);
+        const auto age = ItlAwdl::clockDelta(t.freshGp2,t.frameGp2);
+        if (age>=0 && age<=2000) put("frame_age_at_fresh_read_us",uint64_t(age));
+        if (t.doorbellHostUs>=t.freshHostUs && t.freshHostUs)
+            put("fresh_to_doorbell_host_us",t.doorbellHostUs-t.freshHostUs);
+        if (t.returnHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+            put("doorbell_to_return_host_us",t.returnHostUs-t.doorbellHostUs);
+        if (t.completed && t.clockValid) {
+            const auto elapsed = ItlAwdl::clockDelta(t.completeGp2,t.freshGp2);
+            if (elapsed>=0) put("fresh_to_complete_gp2_us",uint64_t(elapsed));
+            if (t.completeHostUs>=t.freshHostUs && t.freshHostUs)
+                put("fresh_to_complete_host_us",t.completeHostUs-t.freshHostUs);
+            if (t.completeHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+                put("doorbell_to_complete_host_us",t.completeHostUs-t.doorbellHostUs);
+            if (t.completeHostUs>=t.batchHostUs && t.batchHostUs)
+                put("batch_to_complete_host_us",t.completeHostUs-t.batchHostUs);
+            uint64_t filterNs = 0;
+            absolutetime_to_nanoseconds(t.filterAbsolute,&filterNs);
+            const auto filterUs = filterNs/1000;
+            if (filterUs && filterUs>=t.doorbellHostUs && t.doorbellHostUs && t.batchHostUs>=filterUs) {
+                put("doorbell_to_batch_filter_host_us",filterUs-t.doorbellHostUs);
+                put("batch_filter_to_handler_host_us",t.batchHostUs-filterUs);
+            }
+        }
+        records->setObject(entry); entry->release();
+    }
+    // Only aggregate timing/counters, no packet bytes, identities or pointers.
+    // Published after the radio is stopped, outside the measured interval.
+    owner->setProperty("AX201NativeTxTiming",records);
+    records->release();
 }
 
 IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {

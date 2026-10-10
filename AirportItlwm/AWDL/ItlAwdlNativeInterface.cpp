@@ -706,6 +706,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             r->awdlNativeTimingSamples = r->awdlNativeTimingInvalid = r->awdlNativeMaxCompletionUs = 0;
             r->awdlNativeLastRate = r->awdlNativeTxGp2 = 0;
             if (c->tx) {
+                __atomic_store_n(&r->awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
+                r->awdlNativeTraceCount = r->awdlNativeTraceIndex = 0;
+                bzero(r->awdlNativeTrace,sizeof(r->awdlNativeTrace));
+                o->removeProperty("AX201NativeTxTiming");
                 memcpy(r->awdlNativeAddress,o->selfAddress.ether_addr_octet,6);
                 c->tx->min_rate_mbps = o->minimumRateMbps; c->tx->limit = 4;
             }
@@ -789,6 +793,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             r->awdlNativeRateMbps = 0;
         }
         if (c->tx) {
+            __atomic_store_n(&r->awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
+            r->awdlPublishNativeTxTiming(o);
             c->tx->submitted = s.tx.submitted; c->tx->completed = s.tx.completed;
             c->tx->succeeded = s.tx.succeeded; c->tx->failed = s.tx.failed;
             c->tx->pending = s.tx.pending; c->tx->aborted = s.tx.aborted;

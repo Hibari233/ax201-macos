@@ -173,6 +173,21 @@ private:
     uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
     uint32_t awdlNativeTxGp2 = 0, awdlNativeTimingSamples = 0, awdlNativeTimingInvalid = 0;
     uint32_t awdlNativeMaxCompletionUs = 0, awdlNativeLastRate = 0;
+    // Bounded instrumentation for the explicit four-frame qualification only.
+    // The filter writes an atomic absolute clock; all other fields use the gate.
+    uint32_t awdlNativeTraceArmed = 0;
+    uint64_t awdlNativeFilterAbsolute = 0;
+    uint64_t awdlNativeBatchHostUs = 0, awdlNativeBatchFilterAbsolute = 0;
+    struct NativeTxTrace {
+        uint64_t freshHostUs, doorbellHostUs, returnHostUs, completeHostUs;
+        uint64_t batchHostUs, filterAbsolute;
+        uint32_t frameGp2, freshGp2, completeGp2, qid, index;
+        uint32_t mediaUs, btKill, rtsFailures, frameFailures, firmwareStatus, hostError;
+        bool completed, clockValid;
+    } awdlNativeTrace[4] = {};
+    uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;
+    void awdlNativeTxDoorbell(uint32_t, uint32_t);
+    void awdlPublishNativeTxTiming(IORegistryEntry *);
     struct {
         bool ready = false;
         bool rejected = false;

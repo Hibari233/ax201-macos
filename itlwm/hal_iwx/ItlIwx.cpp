@@ -6073,6 +6073,20 @@ iwx_rx_tx_cmd_single(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
             ItlAwdlClockResponse clock = {};
             auto error = awdlReadClock(&clock);
             const auto delay = ItlAwdl::clockDelta(clock.gp2_us,awdlNativeTxGp2);
+            if (awdlNativeTraceIndex < awdlNativeTraceCount && awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+                auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+                trace.completed = true; trace.completeHostUs = clock.host_end_us;
+                trace.clockValid = !error && (clock.flags&1);
+                trace.completeGp2 = clock.gp2_us;
+                trace.batchHostUs = awdlNativeBatchHostUs;
+                trace.filterAbsolute = awdlNativeBatchFilterAbsolute;
+                trace.mediaUs = le16toh(tx_resp->wireless_media_time);
+                trace.btKill = tx_resp->bt_kill_count;
+                trace.rtsFailures = tx_resp->failure_rts;
+                trace.frameFailures = tx_resp->failure_frame;
+                trace.firmwareStatus = status;
+            }
+            __atomic_store_n(&awdlNativeTraceArmed, uint32_t(0), __ATOMIC_RELEASE);
             if (error || !(clock.flags&1) || delay<0 || delay>30000000) ++awdlNativeTimingInvalid;
             else {
                 ++awdlNativeTimingSamples;
@@ -7252,6 +7266,9 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     /* Kick TX ring. */
     ring->cur = (ring->cur + 1) % getTxQueueSize();
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeTxQualification) awdlNativeTxDoorbell(ring->qid,idx);
+#endif
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     
     /* Mark TX ring as full if we reach a certain threshold. */
@@ -11913,6 +11930,14 @@ iwx_notif_intr(struct iwx_softc *sc)
 {
     struct mbuf_list ml = MBUF_LIST_INITIALIZER();
     uint16_t hw;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeTxQualification) {
+        uint64_t now=0, nanos=0;
+        clock_get_uptime(&now); absolutetime_to_nanoseconds(now,&nanos);
+        awdlNativeBatchHostUs = nanos/1000;
+        awdlNativeBatchFilterAbsolute = __atomic_load_n(&awdlNativeFilterAbsolute,__ATOMIC_ACQUIRE);
+    }
+#endif
     
     //    bus_dmamap_sync(sc->sc_dmat, sc->rxq.stat_dma.map,
     //        0, sc->rxq.stat_dma.size, BUS_DMASYNC_POSTREAD);
@@ -13468,6 +13493,16 @@ bool ItlIwx::
 intrFilter(OSObject *object, IOFilterInterruptEventSource *src)
 {
     ItlIwx *that = (ItlIwx*)object;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Interrupt context: one clock read and lock-free atomics only. Do not
+    // inspect native objects, take the command gate, allocate or log here.
+    static_assert(__atomic_always_lock_free(sizeof(uint64_t),nullptr), "interrupt timestamp must be lock-free");
+    if (__atomic_load_n(&that->awdlNativeTraceArmed,__ATOMIC_ACQUIRE)) {
+        uint64_t now = 0;
+        clock_get_uptime(&now);
+        __atomic_store_n(&that->awdlNativeFilterAbsolute,now,__ATOMIC_RELEASE);
+    }
+#endif
     IWX_WRITE(&that->com, IWX_CSR_INT_MASK, 0);
     return true;
 }

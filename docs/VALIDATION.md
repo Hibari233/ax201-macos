@@ -868,3 +868,35 @@ receive-only observation. The encoded specimens use constructed AW timing;
 they were never transmitted. Native interface/queues stayed disabled and
 unpublished, and received frames were not handed to the native protocol. Native
 peer discovery and AirDrop transfer remain unimplemented.
+
+## Native-template synchronization TX timing failure — 2026-10-10
+
+Source `f359cfe430da573dbe47ab26122f4c458426b403` (revision 35):
+
+- Binary SHA-256: `71f9ac564cc422987aa4071a6e6c86159a7041731c0d9b50120b0e26f0f71da0`
+- Loaded UUID: `4E18865D-0AFF-360A-916C-DC2F5CC8B43D`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38054286061)
+  passed all three jobs. Local UBSan, the native ABI fixture and concrete
+  560-slot comparison passed. A revision 34 rollback was verified.
+
+The 384 initialization contracts, native configuration and template checks
+passed. Two receive-only sessions, now using the advancing local timeline,
+encoded 131/132 coherent clock samples and received 24/20 owned-peer management
+records. Both restored the radio and retained the same disabled native manager.
+
+The first bounded synchronization TX trial submitted one 210-byte broadcast
+PSF at the staged 12 Mbit/s rate. Firmware returned success (`0x01`), but the
+GP2 interval from frame timestamp to completion processing was **25,354 us**.
+This exceeded the existing 5,000 us qualification limit. The diagnostic stopped
+further transmissions, recorded one completion and zero pending/aborted frames,
+then restored the radio. It **failed** TX timing qualification. The completion
+interval includes preparation, firmware and host notification delays; it does
+not locate the delay or measure the actual on-air timestamp. Peer reception
+was not observed.
+
+Wi-Fi restoration was verified before evaluating the failure. WPA2 router pings
+passed 36/36 across the regression and TX harnesses; post-test GPU/display/power
+checks passed. Manager creation remained one and backend calls remained twelve.
+Native interface and queues stayed disabled and unpublished, with no native RX
+handoff, verified discovery or AirDrop transfer. The timeout will not be relaxed
+merely to turn this failure into a pass; the next step is timing attribution.
