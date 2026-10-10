@@ -509,3 +509,48 @@ This establishes BSD attachment and real queue initialization only. There was
 interface/peer/pool remain retained for native ownership; their live teardown,
 firmware scheduling, action/data transport and full transfer matrix are still
 unfinished.
+
+## Native RX context and owned sync templates — 2026-10-10
+
+Source `4338b2f0113652dea8039bc2982998138fe198ae` (revision 20) includes the
+native management-buffer boundary, typed RX metadata, TSF-union validity and
+owned supplementary synchronization templates:
+
+- Binary SHA-256: `70fc244f7f96180c35ced504b0120a016474feccccabe481d1e94ed116e7a26c`
+- Loaded UUID: `CA20EF3C-4FF3-3A80-830B-5D5F38B2861B`; external EFI installation
+  and the revision 18 rollback hashes were verified before an orderly reboot.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38044151426)
+  passed all three jobs. Local UBSan passed. The actual interface matched 560
+  native slots/63 backend methods; management-buffer fixtures matched 71 slots.
+
+Eight malformed initialization requests were rejected. One base-only instance
+and three full instances were initialized and released. The full instances
+passed **384 backend contract checks** with zero failures and zero remaining
+objects/provider opens. The checks cover the disabled sync getter, owned
+template bytes after producer mutation, malformed-update preservation, and
+unchanged rejection by the remaining unsupported methods. No native peer
+manager was created in these tests.
+
+An initial passive-listen request correctly returned busy while ordinary Wi-Fi
+was associated. With Wi-Fi temporarily powered off, a five-second channel-6
+capture received **39 frames from the selected owned peer**. All 39 carried
+valid GP2 and TSF flags and parsed valid schedules. The longest coherent run
+was 25 samples, with no phase outliers; hardware-clock phase error had median
+absolute 180 us and p95 absolute 840 us. These are passive observations, not
+native synchronization or scheduled transmission. The overloaded-TSF branch
+was tested offline; no live frame in this capture exercised it.
+
+The restoration harness re-enabled Wi-Fi in its `finally` block, then stopped
+on its first six-second ping timeout. A later independent interface-bound
+check passed 3/3. Together with the before/after contract checks, WPA2 passed
+9/9 completed router pings. The initial timeout is not counted as a pass.
+GPU/display health checks passed at the existing 1920×1080, 240 Hz, with
+unchanged hashes and zero GPU I/O failures or flip-latch timeouts. This records
+configuration/counters, not a new visual desktop confirmation.
+
+An offline replay of 677 earlier owned-peer frames passed the typed metadata
+encoder and frame boundary. Neither that replay nor this live capture invoked
+native management-buffer handoff. Native RX clock mapping, sync-event delivery,
+enabled radio scheduling, peer discovery and bidirectional AirDrop transfer
+remain unfinished. Revision 19 was built and CI-tested but was not separately
+installed; its changes are included in revision 20.

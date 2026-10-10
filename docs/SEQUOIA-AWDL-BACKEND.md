@@ -386,6 +386,48 @@ virtual slots; this establishes declarations, not live receive behavior.
 
 ## Request extents
 
+### Availability-window event representation
+
+The 24H32 producer, event-name table and peer-manager dispatcher identify
+**41** as `APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START`. Event **42** means
+window **extension** start; 43 means extensions end and 46 means sync-state
+change. The inherited start definition of 42 is corrected only for the Sequoia
+WCL target. No event is currently emitted by this experimental backend, so this
+is a prerequisite fix, not an explanation for an observed RF failure.
+
+The AW-start encoder uses the audited 36-byte event representation:
+
+| Offset | Representation |
+| --- | --- |
+| 0 | 16-bit AW counter zero-extended to a host-endian 32-bit word |
+| 4 | Host-endian native role: elected master 1, follower 2, non-election master 3 |
+| 8, 14 | Six-byte immediate-master and top-master MAC addresses |
+| 20 | Local native anchor timestamp, **big endian** |
+| 24 | 12-byte host-endian native channel (version, primary channel, flags) |
+
+This timestamp differs from the host-endian action-RX metadata timestamp.
+The native peer-timeline calculation subtracts 3500 us from the stored AW
+anchor. The codec preserves its input value exactly; it does not guess a
+GP2-to-anchor adjustment or substitute timer-delivery time for a hardware
+boundary. Invalid role, address, channel or absent clock yields a cleared
+output. A valid zero clock and counter wrap are accepted. Support is limited
+to the same 20 MHz channel representation as the RX encoder.
+
+`IO80211SkywalkInterface::reportDataPathEvents` returns a **boolean gate-failure
+flag**, not `IOReturn`: its native wrapper converts the gate result with
+`test eax; setne al`. The gate callback invokes the peer manager, may forward
+the event to userspace, and returns zero independently of whether the peer
+manager forwarded it. False therefore indicates completed dispatch, not an
+acknowledged RF event or peer discovery. The Sequoia declaration and compile
+fixture now preserve this return type without changing its vtable slot.
+
+The encoder is offline-tested but is not connected to native event dispatch.
+Native synchronization must be configured and the actual radio boundary/clock
+mapping qualified before emitting these events. A successful serialization
+alone cannot make the current disabled backend ready.
+
+### Backend request storage
+
 Two backend requests now have concrete host behavior. `getAWDL_SYNC_ENABLED`
 clears its audited 12-byte output, sets version 1 and reports disabled. Neither
 `IFF_UP` nor a saved template makes synchronization enabled. The setter for
@@ -404,7 +446,10 @@ backend must construct those separately. On the inspected 24H32 build, selector
 contain null entries. The internal wrapper checks the interface state and casts
 to the AWDL protocol before calling the backend with the native kernel producer's
 descriptor. No new user-client method accepts this pointer-bearing structure.
-Runtime qualification remains pending before deployment.
+Revision 20 qualified the disabled getter, owned template snapshot, rejection
+and cleanup contracts during bounded initialization on 24H32. It did not call
+the native peer manager's template producer or enable synchronization; see
+`VALIDATION.md` for the exact runtime scope.
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
 at `0xffffff8002988078` returns a full `IOReturn`, preserving the copy/registration

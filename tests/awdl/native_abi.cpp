@@ -6,6 +6,7 @@
 #include <Airport/macOS15/IOSkywalkTxSubmissionQueue.h>
 #include <Airport/macOS15/IOSkywalkRxCompletionQueue.h>
 #include <Airport/macOS15/IO80211ManagementBuffer.h>
+#include <AWDL/AwdlNativeEvents.h>
 
 // Force compiler vtables for every packet base, including the pool release
 // override. Compare these object-file relocations to the target's native ABI.
@@ -63,6 +64,16 @@ static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)
                         bool), "Sequoia BPF attach returns bool");
 static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)->configureIfnet()),
                         void), "Sequoia ifnet configuration return is not a readiness result");
+static_assert(__is_same(decltype(static_cast<IO80211SkywalkInterface *>(nullptr)->reportDataPathEvents(
+                        0, nullptr, 0, false)), bool), "24H32 event dispatch returns gate-failure bool");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START == ItlAwdl::NativeAvailabilityWindowStartEvent,
+              "24H32 AW start event is 41, not extension-start 42");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSION_START == ItlAwdl::NativeAvailabilityWindowExtensionStartEvent,
+              "24H32 AW extension event");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSIONS_END == ItlAwdl::NativeAvailabilityWindowEndEvent,
+              "24H32 AW end event");
+static_assert(APPLE80211_M_AWDL_SYNC_STATE_CHANGED == ItlAwdl::NativeSyncStateChangedEvent,
+              "24H32 sync state event");
 
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)

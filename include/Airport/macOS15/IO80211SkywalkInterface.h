@@ -90,7 +90,9 @@ public:
     virtual void * createPeerManager();
 private: virtual void _abi_0b10() __asm__("__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"); public:
     virtual void postMessage(unsigned int, void*, unsigned long, bool);
-    virtual IOReturn reportDataPathEvents(unsigned int, void*, unsigned long, bool);
+    // 24H32 returns a boolean gate-failure flag (test eax; setne al), not
+    // IOReturn or the peer manager's handled result. False is dispatch success.
+    virtual bool reportDataPathEvents(unsigned int, void*, unsigned long, bool);
     virtual IOReturn recordOutputPackets(TxSubmissionDequeueStats*, TxSubmissionDequeueStats*);
     virtual IOReturn recordOutputPacket(apple80211_wme_ac, int, int);
     virtual void logTxPacket(IO80211NetworkPacket*, PacketSkywalkScratch*, apple80211_wme_ac, bool);
