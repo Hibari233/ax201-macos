@@ -497,12 +497,15 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     return result;
 }
 
-void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index, uint32_t nextSequence) {
+void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index, uint32_t nextSequence,
+    uint32_t offloadAssist, uint32_t headerLength) {
     if (!awdlNativeTxQualification || !awdlNativeRadioOwner ||
         awdlNativeTraceIndex >= awdlNativeTraceCount || awdlNativeTraceIndex >= nitems(awdlNativeTrace)) return;
     auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
     trace.qid = qid; trace.index = index;
     trace.nextSequence = nextSequence&0xfffU;
+    trace.commandOffloadAssist = offloadAssist;
+    trace.commandHeaderLength = headerLength;
     // Host clock immediately before the existing MMIO write, not an on-air
     // timestamp. Do not add another peripheral read/lock to the hot TX path.
     trace.doorbellHostUs = awdlNowUs();
@@ -562,6 +565,8 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         };
         put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
         put("qid",t.qid); put("index",t.index);
+        put("command_offload_assist",t.commandOffloadAssist);
+        put("command_header_length",t.commandHeaderLength);
         put("host_error",t.hostError); put("firmware_status",t.firmwareStatus);
         put("firmware_media_us",t.mediaUs); put("bluetooth_kills",t.btKill);
         put("rts_failures",t.rtsFailures); put("frame_failures",t.frameFailures);

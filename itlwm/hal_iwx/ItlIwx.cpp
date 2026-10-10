@@ -7181,6 +7181,16 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     if (hdrlen % 4)
         offload_assist |= IWX_TX_CMD_OFFLD_PAD;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Linux v6.12 mvm/tx.c iwl_mvm_tx_csum() supplies the MAC header
+    // length even for management frames without checksum offload. Keep this
+    // qualification change isolated until its firmware behavior is measured.
+    if (awdlNativeTxQualification && ic->ic_opmode == IEEE80211_M_MONITOR) {
+        static_assert(IWX_TX_CMD_OFFLD_MH_SIZE(24 / 2) == 0x0c00,
+            "unprotected action header length is twelve 16-bit words");
+        offload_assist |= IWX_TX_CMD_OFFLD_MH_SIZE(hdrlen / 2);
+    }
+#endif
     
     if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
         tx_gen3 = (struct iwx_tx_cmd_gen3 *)cmd->data;
@@ -7267,7 +7277,8 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     /* Kick TX ring. */
     ring->cur = (ring->cur + 1) % getTxQueueSize();
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    if (awdlNativeTxQualification) awdlNativeTxDoorbell(ring->qid,idx,ring->cur);
+    if (awdlNativeTxQualification)
+        awdlNativeTxDoorbell(ring->qid,idx,ring->cur,offload_assist,hdrlen);
 #endif
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     

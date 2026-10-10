@@ -187,13 +187,14 @@ private:
         uint64_t dmaReplyHostUs;
         uint32_t nextSequence, packetLength, dmaProbeSamples, dmaPendingMax, dmaScanTruncated;
         uint32_t dmaStatus, dmaMediaUs;
+        uint32_t commandOffloadAssist, commandHeaderLength;
         uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
         uint16_t peerWindowCounter;
         uint8_t peerWindowChannel;
         bool completed, clockValid, dmaProbeSupported;
     } awdlNativeTrace[4] = {};
     uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;
-    void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t);
+    void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
     uint64_t awdlObserveNativeTxDma();
     void awdlPublishNativeTxTiming(IORegistryEntry *);
     struct {
