@@ -591,6 +591,12 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         put("mac_clock_ready_samples",t.macClockReadySamples);
         put("mac_going_to_sleep_samples",t.macSleepingSamples);
         put("mac_invalid_samples",t.macInvalidSamples);
+        put("pending_clock_reads",t.pendingClockReads);
+        put("pending_clock_max_read_us",t.pendingClockMaxReadUs);
+        if (t.firstPendingClockHostUs>=t.doorbellHostUs && t.doorbellHostUs) {
+            put("doorbell_to_first_pending_clock_host_us",t.firstPendingClockHostUs-t.doorbellHostUs);
+            put("doorbell_to_last_pending_clock_host_us",t.lastPendingClockHostUs-t.doorbellHostUs);
+        }
         put("rx_before_ack_delivery_frames",t.beforeAckRx.frames);
         put("rx_before_ack_delivery_bytes",t.beforeAckRx.bytes);
         put("rx_before_ack_delivery_management",t.beforeAckRx.management);
@@ -713,6 +719,18 @@ IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
     out->gp2_us = iwx_read_prph(&com, out->register_address);
     iwx_nic_unlock(&com);
     out->host_end_us = awdlNowUs();
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && awdl.tx.pending &&
+        awdlNativeTraceIndex<awdlNativeTraceCount && awdlNativeTraceIndex<nitems(awdlNativeTrace)) {
+        auto &trace=awdlNativeTrace[awdlNativeTraceIndex];
+        if (trace.doorbellHostUs && out->host_begin_us>=trace.doorbellHostUs) {
+            if (!trace.pendingClockReads) trace.firstPendingClockHostUs=out->host_begin_us;
+            trace.lastPendingClockHostUs=out->host_begin_us;
+            ++trace.pendingClockReads;
+            const auto duration=out->host_end_us-out->host_begin_us;
+            if (duration>trace.pendingClockMaxReadUs)
+                trace.pendingClockMaxReadUs=uint32_t(duration>UINT32_MAX ? UINT32_MAX : duration);
+        }
+    }
     out->rx_gp2_us = awdl.lastPeerGp2;
     out->rx_host_us = awdl.lastPeerRxUs;
     out->phy_command_version = iwx_lookup_cmd_ver(&com, IWX_LONG_GROUP, IWX_PHY_CONTEXT_CMD);

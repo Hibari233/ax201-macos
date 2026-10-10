@@ -193,6 +193,8 @@ private:
         uint64_t firstAckHostUs;
         ItlAwdl::PendingRxObservation beforeAckRx;
         uint32_t macReadSamples, macClockReadySamples, macSleepingSamples, macInvalidSamples;
+        uint32_t pendingClockReads, pendingClockMaxReadUs;
+        uint64_t firstPendingClockHostUs, lastPendingClockHostUs;
         uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
         uint16_t peerWindowCounter;
         uint8_t peerWindowChannel;

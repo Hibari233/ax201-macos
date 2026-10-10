@@ -904,7 +904,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             if (c->tx) {
                 const auto now=r->awdlObserveNativeTxDma();
                 if (now<c->nextClockHostUs) return kIOReturnSuccess;
-                c->nextClockHostUs=now+20000;
+                // Controlled timing experiment: a PRPH clock read grabs NIC
+                // access, unlike the passive CSR/DMA observation. Check if the
+                // prior 20 ms read cadence was affecting the pending TX.
+                c->nextClockHostUs=now+(s.tx.pending ? 2000 : 20000);
             }
             ItlAwdlClockResponse clock = {};
             auto result = r->awdlReadClock(&clock);
@@ -963,6 +966,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                         (!c->sentWindow || window != c->lastWindow) && overlap && !navRemaining) {
                         auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us,c->unicast);
                         if (!sent) {
+                            c->nextClockHostUs=clock.host_end_us+2000;
                             if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
                             c->tx->last_counter = boundary.counter; ++c->tx->windows_used;
                             c->sentWindow = true; c->lastWindow = window;
@@ -1047,9 +1051,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         call.phase = 1;
         // The independent radio timer also expires the lease. Sleeps happen
         // outside the gate, allowing RX, firmware completion and power teardown.
-        // In TX qualification only, observe completed DMA buffers between the
-        // existing 20 ms clock/RF steps. Observation never wakes the NIC or
-        // consumes a response. The original TX completion limit is unchanged.
+        // In TX qualification, inspect completed DMA at 1 ms and read GP2 at
+        // 2 ms while a frame is pending (20 ms otherwise). GP2 reads can affect
+        // NIC access, so this is an active timing experiment. DMA observation
+        // never consumes a response. The TX completion limit is unchanged.
         const uint32_t delayMs=tx ? 1 : 20;
         for (uint32_t elapsed = 0; !call.finished && elapsed < request->dwell_ms + 100; elapsed += delayMs) {
             IOSleep(delayMs);
