@@ -1294,3 +1294,28 @@ The detached harness restored WPA2 (42/42 pings), preserved the retained
 manager, and passed GPU/display/power checks before reporting failed timing.
 The receiving Mac still had no transmitter database entry. No operational
 native interface, RX handoff or file transfer was enabled.
+
+## Observed reservation deferral — 2026-10-11
+
+Source `cb245ac5726ecb44bf383955991bdf273d7b6590` (revision 47), binary
+`20b28020f5e973f479d27ac4454c32f189255475b62cce6aed0c3268e451fe12`, loaded
+UUID `459EE747-E596-3C15-A769-A6A55CB79CB5`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38068343655)
+passed all three jobs. Twelve local C++ UBSan suites, five Python checks,
+both 560-slot/63-method ABI comparisons, 384 runtime initialization contracts
+and the configuration/timing/template baseline passed. Rollback is revision 46.
+
+The bounded unicast deferred one otherwise eligible sample because a decoded
+reservation still had **4,855 us** remaining. A later attempt completed in
+firmware without retries, but its addressed ACK arrived **22,486 us** after the
+encoded timestamp and completion at **23,658 us**. All 20 MAC-status samples
+were awake. Two decoded frames before ACK delivery (640 bytes) had a maximum
+Duration value of 276 us. The software deferral was exercised, but it did not
+resolve the 5 ms timing failure. It does not replace firmware carrier sensing
+or establish how long the RF medium was busy.
+
+The receiving Mac had no transmitter entry in 211 samples. The detached
+harness restored WPA2 (42/42 pings), retained the same manager, and passed
+GPU/display/power checks. An SSH session expired during the trial; a fresh
+connection succeeded and the boot-session UUID was unchanged. No native
+interface, queues or RX handoff were enabled. Native AirDrop remains unavailable.
