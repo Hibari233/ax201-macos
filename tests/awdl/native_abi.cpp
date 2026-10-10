@@ -54,6 +54,11 @@ static_assert(__is_same(decltype(static_cast<IOSkywalkNetworkInterface *>(nullpt
 static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullptr)->deregisterEthernetInterface(0)),
                         IOReturn), "Sequoia deregistration returns IOReturn");
 
+static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)->attachToBpf()),
+                        bool), "Sequoia BPF attach returns bool");
+static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)->configureIfnet()),
+                        void), "Sequoia ifnet configuration return is not a readiness result");
+
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)
 public:

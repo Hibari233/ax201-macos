@@ -6,10 +6,29 @@
 OSDefineMetaClassAndStructors(ItlAwdlNativeTxQueue, IOSkywalkTxSubmissionQueue)
 OSDefineMetaClassAndStructors(ItlAwdlNativeRxQueue, IOSkywalkRxCompletionQueue)
 
+#define ITL_QUEUE_LIFECYCLE(derived, native) \
+IOReturn derived::initialize(void *context) { \
+    ++initializeCalls; \
+    auto result = native::initialize(context); \
+    initializeError = static_cast<uint32_t>(result); \
+    initialized = result == kIOReturnSuccess; \
+    return result; \
+} \
+IOReturn derived::finalize() { \
+    ++finalizeCalls; \
+    auto result = native::finalize(); \
+    if (!result) initialized = false; \
+    return result; \
+}
+ITL_QUEUE_LIFECYCLE(ItlAwdlNativeTxQueue, IOSkywalkTxSubmissionQueue)
+ITL_QUEUE_LIFECYCLE(ItlAwdlNativeRxQueue, IOSkywalkRxCompletionQueue)
+#undef ITL_QUEUE_LIFECYCLE
+
 ItlAwdlNativeTxQueue *ItlAwdlNativeTxQueue::withPool(IOSkywalkPacketBufferPool *pool,
     OSObject *owner, Dequeue callback, void *argument) {
     if (!pool || !owner || !callback) return nullptr;
     auto queue = new ItlAwdlNativeTxQueue;
+    if (queue) queue->initializeCalls = queue->finalizeCalls = queue->initializeError = queue->initialized = 0;
     if (queue && !queue->initWithPool(pool, ~0U, 32, 0, owner, nullptr, callback, argument, 0)) {
         queue->release();
         return nullptr;
@@ -20,6 +39,7 @@ ItlAwdlNativeRxQueue *ItlAwdlNativeRxQueue::withPool(IOSkywalkPacketBufferPool *
     OSObject *owner, Enqueue callback, void *argument) {
     if (!pool || !owner || !callback) return nullptr;
     auto queue = new ItlAwdlNativeRxQueue;
+    if (queue) queue->initializeCalls = queue->finalizeCalls = queue->initializeError = queue->initialized = 0;
     if (queue && !queue->initWithPool(pool, 32, 1, owner, callback, argument, 0)) {
         queue->release();
         return nullptr;

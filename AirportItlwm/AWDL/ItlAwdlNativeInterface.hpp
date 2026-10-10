@@ -13,8 +13,8 @@ class IOSkywalkPacket;
 class IOSkywalkTxSubmissionQueue;
 class IOSkywalkRxCompletionQueue;
 
-// Native integration under the radio gate, including retained, unpublished
-// queue registration. No firmware command, link enable or AirDrop claim.
+// Retained native integration and explicit BSD publication. The unfinished
+// radio backend rejects enable requests; no AirDrop capability claim.
 class ItlAwdlNativeInterface : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(ItlAwdlNativeInterface)
 public:
@@ -31,6 +31,8 @@ public:
         const ItlAwdlNativeQueueRequest *, ItlAwdlNativeQueueResponse *);
     static IOReturn managedTransport(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeTransportRequest *, ItlAwdlNativeTransportResponse *);
+    static IOReturn managedBSD(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeBSDRequest *, ItlAwdlNativeBSDResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -38,6 +40,9 @@ public:
     IO80211Controller *getController() override { return controller; }
     ether_addr getSelfMacAddr() override { return selfAddress; }
     const char *getBSDNamePrefix() override { return "awdl"; }
+    IOReturn enable(unsigned int) override;
+    SInt32 setInterfaceEnable(bool) override;
+    IOReturn prepareBSDInterface(ifnet_t, unsigned int) override;
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \
@@ -65,8 +70,12 @@ private:
     bool transportTxAdded, transportRxAdded, transportRegistrationAttempted, transportRegistered;
     uint32_t transportPrepares, transportRegisters, transportDeregisters, transportCallbacks;
     uint32_t transportCleanupErrors, transportLastStage;
+    bool bsdPublishRequested;
+    uint32_t bsdPublishCalls, bsdPrepareCalls, bsdPrepareError;
+    uint32_t bsdEnableCalls, bsdEnableDenied;
+    void describeBSD(ItlAwdlNativeBSDResponse *);
     IOReturn prepareTransport(IOWorkLoop *, uint32_t);
-    IOReturn clearTransport();
+    IOReturn clearTransport(bool systemStop = false);
     void describeTransport(ItlAwdlNativeTransportResponse *);
     static unsigned int transportDequeue(OSObject *, IOSkywalkTxSubmissionQueue *,
         IOSkywalkPacket *const *, unsigned int, void *);

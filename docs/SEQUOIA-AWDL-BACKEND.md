@@ -285,6 +285,37 @@ BSD interface; live BSD shutdown and its reporting/lock ordering require further
 implementation. Native `deferBSDAttach(bool)` returns `IOReturn`, corrected here
 without changing its virtual slot. Runtime results belong in `VALIDATION.md`.
 
+## Native BSD publication prototype
+
+Selector 25 and capability bit 32768 explicitly publish the retained interface
+to `IOSkywalkNetworkBSDClient`. `awdl_native_bsd` provides `selftest`, `status`
+and `publish`. A retained session and successful queue registration must exist
+first. Publication releases the deferred-BSD property outside the wireless gate
+so native matching can acquire that gate. It is asynchronous and idempotent;
+status distinguishes the request from a prepared ifnet and attached BSD client.
+Nothing publishes this interface automatically at boot.
+
+The native BSD client creates its Nexus/netif queue contexts. Both queue
+subclasses now wrap native initialize/finalize, preserving return values and
+recording initialization errors: the inspected native queue callback otherwise
+ignores the initialize result. The wrappers add four diagnostic words after
+each unchanged base layout. Status reports initialized state separately from
+kernel-queue presence and enabled state.
+
+The radio backend is still incomplete. The interface overrides `enable` to
+preserve `IOSkywalkNetworkInterface`'s error and rejects true
+`setInterfaceEnable` requests with `kIOReturnNotReady`. It does not enable TX/RX
+or claim successful radio operation. Its BSD preparation preserves a failed
+lower-base result before configuring ifnet/BPF; BPF/native reporting internals
+are not claimed to have exhaustive error handling.
+
+After publication, the earlier manual `clear` and `session retire` controls are
+rejected. Those probe paths must not free queue/interface resources owned by a
+live BSD/Nexus client. The object is retained until system-managed termination
+or reboot; live unpublication is not yet a supported control. This is a staged
+integration boundary, not native AirDrop support or sleep/unload qualification.
+Runtime evidence and failures are recorded separately in `VALIDATION.md`.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`

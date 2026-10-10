@@ -7,6 +7,7 @@ class IOSkywalkPacket;
 class IOSkywalkPacketBuffer;
 class IOSkywalkPacketBufferPool;
 class IOSkywalkPacketPoller;
+struct netif_queue;
 
 // 24H32 x86_64. Unused, unaudited entry points retain their native slots but
 // are private aliases, not callable APIs. There is no driver-owned layout here.
@@ -60,6 +61,7 @@ public:
     unsigned int getDirection() const;
     unsigned int getQueueId() const;
     IOSkywalkInterface *getInterface() const;
+    netif_queue *getKernNetifQueue();
 };
 static_assert(sizeof(IOSkywalkPacketQueue) == 0xd8, "24H32 packet queue extent");
 static_assert(sizeof(IOSkywalkPacketQueue::QueueInfo) == 16, "24H32 command 0x10000 output");

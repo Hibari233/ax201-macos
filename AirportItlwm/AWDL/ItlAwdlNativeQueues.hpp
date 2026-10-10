@@ -6,18 +6,25 @@
 class IOWorkLoop;
 
 // Distinct metaclasses let diagnostics count only the queues they own.
-// Construction keeps the native implementation and adds no virtual overrides.
+// Lifecycle wrappers preserve native results, including initialization errors
+// the native Nexus callback otherwise discards. No custom packet processing.
 class ItlAwdlNativeTxQueue : public IOSkywalkTxSubmissionQueue {
     OSDeclareDefaultStructors(ItlAwdlNativeTxQueue)
 public:
     static ItlAwdlNativeTxQueue *withPool(IOSkywalkPacketBufferPool *, OSObject *, Dequeue, void *);
+    IOReturn initialize(void *) override;
+    IOReturn finalize() override;
+    uint32_t initializeCalls, finalizeCalls, initializeError, initialized;
 };
 class ItlAwdlNativeRxQueue : public IOSkywalkRxCompletionQueue {
     OSDeclareDefaultStructors(ItlAwdlNativeRxQueue)
 public:
     static ItlAwdlNativeRxQueue *withPool(IOSkywalkPacketBufferPool *, OSObject *, Enqueue, void *);
+    IOReturn initialize(void *) override;
+    IOReturn finalize() override;
+    uint32_t initializeCalls, finalizeCalls, initializeError, initialized;
 };
-static_assert(sizeof(ItlAwdlNativeTxQueue) == 0x168, "TX queue adds no native fields");
-static_assert(sizeof(ItlAwdlNativeRxQueue) == 0x138, "RX queue adds no native fields");
+static_assert(sizeof(ItlAwdlNativeTxQueue) == 0x178, "TX queue adds four diagnostic words");
+static_assert(sizeof(ItlAwdlNativeRxQueue) == 0x148, "RX queue adds four diagnostic words");
 
 IOReturn ItlAwdlProbeNativeQueues(OSObject *, IOWorkLoop *, unsigned int, ItlAwdlNativeQueueResponse *);

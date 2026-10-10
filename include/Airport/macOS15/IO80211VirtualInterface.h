@@ -146,9 +146,9 @@ public:
     // vptr + 0xed0: IO80211VirtualInterface::configureAQMOutput()
     private: virtual void _native_0ed0() __asm__("__ZN23IO80211VirtualInterface18configureAQMOutputEv"); public:
     // vptr + 0xed8: IO80211VirtualInterface::attachToBpf()
-    private: virtual void _native_0ed8() __asm__("__ZN23IO80211VirtualInterface11attachToBpfEv"); public:
+    virtual bool attachToBpf();
     // vptr + 0xee0: IO80211VirtualInterface::configureIfnet()
-    private: virtual void _native_0ee0() __asm__("__ZN23IO80211VirtualInterface14configureIfnetEv"); public:
+    virtual void configureIfnet();
     // vptr + 0xee8: IO80211VirtualInterface::reset()
     private: virtual void _native_0ee8() __asm__("__ZN23IO80211VirtualInterface5resetEv"); public:
     // vptr + 0xef0: IO80211VirtualInterface::dupAndTransmitMcastPacket(IO80211NetworkPacket*, unsigned char*, unsigned char*)

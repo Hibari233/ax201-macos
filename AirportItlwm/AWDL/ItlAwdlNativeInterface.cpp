@@ -6,6 +6,7 @@
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
 #include <libkern/c++/OSSymbol.h>
+#include <libkern/c++/OSIterator.h>
 #include <libkern/OSAtomic.h>
 
 namespace {
@@ -42,8 +43,125 @@ const OSMetaClass *nativePeerClass() {
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
+IOReturn ItlAwdlNativeInterface::enable(unsigned int options) {
+    ++bsdEnableCalls;
+    // VirtualInterface::enable discards lower-base errors. Keep the native
+    // enabled bit false until setInterfaceEnable can start a real backend.
+    return IOSkywalkNetworkInterface::enable(options);
+}
+SInt32 ItlAwdlNativeInterface::setInterfaceEnable(bool enabled) {
+    if (enabled) { ++bsdEnableDenied; return kIOReturnNotReady; }
+    // No true transition has reached VirtualInterface or the radio yet.
+    return IO80211SkywalkInterface::setInterfaceEnable(false);
+}
+IOReturn ItlAwdlNativeInterface::prepareBSDInterface(ifnet_t interface, unsigned int options) {
+    ++bsdPrepareCalls;
+    // The native Virtual wrapper continues on a failed lower-base preparation
+    // and can overwrite its error. Only configure a successfully prepared ifnet.
+    auto result = IO80211SkywalkInterface::prepareBSDInterface(interface, options);
+    if (!result) {
+        configureIfnet();
+        if (!attachToBpf()) result = kIOReturnError;
+    }
+    bsdPrepareError = static_cast<uint32_t>(result);
+    IOLog("AX201 native BSD: prepare result=0x%x\n", result);
+    return result;
+}
+
+void ItlAwdlNativeInterface::describeBSD(ItlAwdlNativeBSDResponse *out) {
+    out->publication_requested = bsdPublishRequested;
+    out->publish_calls = bsdPublishCalls;
+    out->prepare_calls = bsdPrepareCalls;
+    out->prepare_error = bsdPrepareError;
+    out->enable_calls = bsdEnableCalls;
+    out->enable_denied = bsdEnableDenied;
+    out->bsd_present = getBSDInterface() != nullptr;
+    out->callback_calls = transportCallbacks;
+    out->registry_id = getRegistryEntryID();
+    if (out->bsd_present) {
+        const auto name = getBSDName();
+        if (name) strlcpy(out->bsd_name, name, sizeof(out->bsd_name));
+    }
+    auto clients = getClientIterator();
+    if (clients) {
+        while (auto object = clients->getNextObject()) {
+            if (object->metaCast("IOSkywalkNetworkBSDClient")) ++out->bsd_clients;
+        }
+        clients->release();
+    }
+    if (transportTx) {
+        out->tx_initialize_calls = transportTx->initializeCalls;
+        out->tx_initialized = transportTx->initialized;
+        out->tx_initialize_error = transportTx->initializeError;
+        out->tx_kernel_queue = transportTx->getKernNetifQueue() != nullptr;
+        out->tx_enabled = transportTx->isEnabled();
+    }
+    if (transportRx) {
+        out->rx_initialize_calls = transportRx->initializeCalls;
+        out->rx_initialized = transportRx->initialized;
+        out->rx_initialize_error = transportRx->initializeError;
+        out->rx_kernel_queue = transportRx->getKernNetifQueue() != nullptr;
+        out->rx_enabled = transportRx->isEnabled();
+    }
+}
+
+IOReturn ItlAwdlNativeInterface::managedBSD(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeBSDRequest *request, ItlAwdlNativeBSDResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlBSDPublish || request->reserved[0] || request->reserved[1])
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; IOWorkLoop *loop;
+        const ItlAwdlNativeBSDRequest *request; ItlAwdlNativeBSDResponse *out;
+        ItlAwdlNativeInterface *publish; } call = {parent, radio, gate->getWorkLoop(), request, out, nullptr};
+    auto result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        if (c->parent->isInactive()) return kIOReturnNotReady;
+        ItlAwdlStatusResponse status = {};
+        auto result = c->radio->awdlCommand(c->parent, ItlAwdlStatus, nullptr, &status);
+        if (result) return result;
+        if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle) return kIOReturnBusy;
+        auto object = c->parent->nativeAwdlInterface;
+        if (!object) return c->request->operation == ItlAwdlBSDInspect ? kIOReturnSuccess : kIOReturnNotReady;
+        if (c->parent->getAwdlInterface() != object || object->isInactive()) return kIOReturnNotReady;
+        if (c->request->operation == ItlAwdlBSDPublish && !object->bsdPublishRequested) {
+            if (!object->transportRegistered || !object->startAttempted ||
+                object->getWorkLoop() != c->loop || object->transportLoop != c->loop)
+                return kIOReturnNotReady;
+            object->bsdPublishRequested = true;
+            ++object->bsdPublishCalls;
+            object->retain();
+            c->publish = object;
+        }
+        object->describeBSD(c->out);
+        return kIOReturnSuccess;
+    }, &call);
+    if (result) return result;
+    if (call.publish) {
+        // Native matching can start a BSD client which takes the interface
+        // work-loop gate. Publish outside that gate, with the object retained.
+        auto published = call.publish->deferBSDAttach(false);
+        result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            auto c = static_cast<Call *>(argument);
+            c->publish->describeBSD(c->out);
+            return kIOReturnSuccess;
+        }, &call);
+        out->last_error = static_cast<uint32_t>(published ? published : result);
+        call.publish->release();
+    }
+    return kIOReturnSuccess;
+}
+
 // These callbacks remain attached to the retained object's lifetime, never a
-// user-client stack frame. Native rings are not initialized or enabled yet.
+// user-client stack frame. The native BSD client may initialize real queues;
+// radio enable remains blocked, so neither callback may consume packets yet.
 unsigned int ItlAwdlNativeInterface::transportDequeue(OSObject *owner,
     IOSkywalkTxSubmissionQueue *, IOSkywalkPacket *const *, unsigned int, void *) {
     ++static_cast<ItlAwdlNativeInterface *>(owner)->transportCallbacks;
@@ -55,7 +173,8 @@ unsigned int ItlAwdlNativeInterface::transportEnqueue(OSObject *owner,
     return 0;
 }
 
-IOReturn ItlAwdlNativeInterface::clearTransport() {
+IOReturn ItlAwdlNativeInterface::clearTransport(bool systemStop) {
+    if (bsdPublishRequested && !systemStop) return kIOReturnNotPermitted;
     // Deregistration alone does not detach a live BSD client. This boundary is
     // only qualified before publication; never free beneath an attached ifnet.
     if (getBSDInterface()) return kIOReturnBusy;
@@ -349,6 +468,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     transportRx = nullptr;
     transportLoop = nullptr;
     transportTxAdded = transportRxAdded = transportRegistrationAttempted = transportRegistered = false;
+    bsdPublishRequested = false;
+    bsdPublishCalls = bsdPrepareCalls = bsdPrepareError = bsdEnableCalls = bsdEnableDenied = 0;
     transportPrepares = transportRegisters = transportDeregisters = transportCallbacks = 0;
     transportCleanupErrors = transportLastStage = 0;
     selfAddress = *address;
@@ -414,7 +535,7 @@ void ItlAwdlNativeInterface::stop(IOService *provider) {
     if (!startAttempted) return;
     // Transport registration belongs to this same once-per-boot peer manager.
     // Clear its references before native stop destroys the interface resources.
-    if (clearTransport()) IOLog("AX201 native transport: cleanup failed during stop\n");
+    if (clearTransport(true)) IOLog("AX201 native transport: cleanup failed during stop\n");
     startAttempted = false;
     startAllowed = false;
     auto state = nativeStartState();
@@ -750,6 +871,10 @@ IOReturn ItlAwdlNativeInterface::managedSessionGated(AirportItlwm *parent, ItlIw
     auto result = radio->awdlCommand(parent, ItlAwdlStatus, nullptr, &status);
     if (result) return result;
     if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+    // Once published, child BSD/Nexus services own live references. Manual
+    // probe teardown must not bypass normal IOService termination ordering.
+    if (operation == ItlAwdlNativeRetire && parent->nativeAwdlInterface &&
+        parent->nativeAwdlInterface->bsdPublishRequested) return kIOReturnNotPermitted;
     if (operation == ItlAwdlNativeRetire) releaseManagedGated(parent);
     if (operation == ItlAwdlNativeCreate && !parent->nativeAwdlInterface) {
         if (nativePeerAttempted()) return kIOReturnNotPermitted;
