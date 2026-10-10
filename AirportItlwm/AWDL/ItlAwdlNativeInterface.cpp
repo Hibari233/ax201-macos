@@ -11,6 +11,11 @@
 #include <libkern/c++/OSIterator.h>
 #include <libkern/OSAtomic.h>
 
+// Exported non-virtual member in 24H32. The bridge uses only the retained
+// OSObject pointer; no guessed peer-manager class layout or private writes.
+extern "C" IOReturn nativeAwdlConfigure(OSObject *)
+    __asm__("__ZN22IO80211AWDLPeerManager9configureEv");
+
 namespace {
 // Native log/service detach may defer the final release until the work queue
 // gate opens. Serialize both probe entry points while waiting outside that gate.
@@ -45,31 +50,103 @@ const OSMetaClass *nativePeerClass() {
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
+IOReturn ItlAwdlNativeInterface::backendResult(BackendIndex index, IOReturn result) {
+    OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&backendCalls));
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (loop && loop->inGate() && configurationTracing) {
+        auto &trace = configurationResult;
+        if (trace.trace_count < ITL_AWDL_CONFIGURE_TRACE_COUNT)
+            trace.trace[trace.trace_count++] = {0xfa0U + 8U * index, static_cast<uint32_t>(result)};
+        else ++trace.trace_dropped;
+    }
+    return result;
+}
+
 IOReturn ItlAwdlNativeInterface::getAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *data) {
-    ++backendCalls;
-    if (!data) return kIOReturnBadArgument;
-    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_SYNC_ENABLED, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
     static_assert(sizeof(*data) == 12, "24H32 sync-enabled request");
     bzero(data, sizeof(*data));
     data->version = 1;
     // Radio synchronization cannot be enabled yet. Report its actual state,
     // independently of administrative IFF_UP or a staged frame template.
-    return kIOReturnSuccess;
+    return finish(kIOReturnSuccess);
 }
 
 IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_sync_frame_template *data) {
-    ++backendCalls;
-    if (!data) return kIOReturnBadArgument;
-    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_FRAME_TEMPLATE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
     auto loop = controller ? controller->getWorkLoop() : nullptr;
-    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return kIOReturnNotReady;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 16, "24H32 template request");
     static_assert(offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "24H32 template pointer");
     if (data->version > 1 || !syncTemplate.replace(
-        static_cast<const uint8_t *>(data->payload), data->payload_len)) return kIOReturnBadArgument;
+        static_cast<const uint8_t *>(data->payload), data->payload_len)) return finish(kIOReturnBadArgument);
     // The host now owns a validated snapshot for a future radio scheduler.
     // No frame is sent and sync-enabled remains false.
-    return kIOReturnSuccess;
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlConfigureRun || request->reserved[0] || request->reserved[1])
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; IOWorkLoop *loop;
+        const ItlAwdlNativeConfigureRequest *request; ItlAwdlNativeConfigureResponse *out;
+    } call = {parent, radio, gate->getWorkLoop(), request, out};
+    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        if (c->parent->isInactive()) return kIOReturnNotReady;
+        ItlAwdlStatusResponse status = {};
+        auto result = c->radio->awdlCommand(c->parent, ItlAwdlStatus, nullptr, &status);
+        if (result) return result;
+        if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle) return kIOReturnBusy;
+        auto object = c->parent->nativeAwdlInterface;
+        if (!object) return c->request->operation == ItlAwdlConfigureInspect ?
+            kIOReturnSuccess : kIOReturnNotReady;
+        if (c->parent->getAwdlInterface() != object || object->isInactive() ||
+            object->resourcesDisposed || !object->startAttempted || object->getWorkLoop() != c->loop)
+            return kIOReturnNotReady;
+        auto &saved = object->configurationResult;
+        if (c->request->operation == ItlAwdlConfigureRun && !saved.attempted) {
+            // No BSD callbacks or queues may race the single configuration
+            // call. Keep this diagnostic separate from operational enable.
+            if (object->bsdPublishRequested || object->getBSDInterface() ||
+                object->transportRegistered || object->isInterfaceEnabled()) return kIOReturnBusy;
+            auto state = object->nativeStartState();
+            auto peerClass = nativePeerClass();
+            auto queue = c->parent->getWorkQueue();
+            if (!state || !state->peerManager || !peerClass ||
+                !state->peerManager->metaCast(peerClass) || !queue || queue->onThread())
+                return kIOReturnNotReady;
+            saved.attempted = 1;
+            saved.backend_before = object->backendCalls;
+            object->configurationTracing = true;
+            saved.native_result = static_cast<uint32_t>(nativeAwdlConfigure(state->peerManager));
+            object->configurationTracing = false;
+            saved.backend_after = object->backendCalls;
+        }
+        memcpy(c->out, &saved, sizeof(*c->out));
+        c->out->version = ITL_AWDL_ABI_VERSION;
+        c->out->present = 1;
+        c->out->registry_id = object->getRegistryEntryID();
+        c->out->interface_enabled = object->isInterfaceEnabled();
+        c->out->tx_enabled = object->transportTx && object->transportTx->isEnabled();
+        c->out->rx_enabled = object->transportRx && object->transportRx->isEnabled();
+        c->out->bsd_present = object->getBSDInterface() != nullptr;
+        return kIOReturnSuccess;
+    }, &call);
 }
 
 size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &context,
@@ -542,6 +619,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
     backendCalls = peerCreationCalls = partialCleanups = 0;
+    configurationTracing = false;
+    bzero(&configurationResult, sizeof(configurationResult));
     transportPool = nullptr;
     transportTx = nullptr;
     transportRx = nullptr;
@@ -785,6 +864,8 @@ IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
 
 void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concrete,
     ItlAwdlNativeInitResponse *out) {
+    const uint32_t callsBefore = concrete->backendCalls;
+    concrete->configurationTracing = true;
     IO80211AWDLProtocol *object = concrete;
     // Exercise virtual dispatch through the native base type. Unknown request
     // extents stay opaque: these methods must not dereference even one byte.
@@ -854,7 +935,16 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     if (failed) ++out->method_failures;
     ether_addr address = {{2, 0, 0, 0, 0, 1}};
     ++out->methods_checked;
-    if (object->setMacAddress(address) != kIOReturnUnsupported) ++out->method_failures;
+    const auto &trace = concrete->configurationResult;
+    if (object->setMacAddress(address) != kIOReturnUnsupported ||
+        trace.attempted || trace.trace_count != ITL_AWDL_CONFIGURE_TRACE_COUNT ||
+        !trace.trace_dropped ||
+        trace.trace_count + trace.trace_dropped != concrete->backendCalls - callsBefore ||
+        trace.trace[0].vptr_offset != 0xfa0 || trace.trace[0].result != kIOReturnBadArgument ||
+        trace.trace[1].vptr_offset != 0xfa0 || trace.trace[1].result != kIOReturnUnsupported)
+        ++out->method_failures;
+    concrete->configurationTracing = false;
+    bzero(&concrete->configurationResult, sizeof(concrete->configurationResult));
 }
 
 IOReturn ItlAwdlNativeInterface::probeGated(AirportItlwm *parent, ItlIwx *radio,

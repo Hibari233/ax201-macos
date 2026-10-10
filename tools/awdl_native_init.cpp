@@ -186,6 +186,71 @@ static int sessionRun(io_connect_t client, uint32_t operation) {
     return 0;
 }
 
+static kern_return_t configureInvoke(io_connect_t client, const ItlAwdlNativeConfigureRequest &r,
+    ItlAwdlNativeConfigureResponse &out, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
+    size_t size = sizeof(ItlAwdlNativeConfigureResponse)) {
+    memset(&out, 0, sizeof(out));
+    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeConfigure, &r, in, &out, &size);
+    if (!result && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION ||
+        out.trace_count > ITL_AWDL_CONFIGURE_TRACE_COUNT)) return kIOReturnBadArgument;
+    return result;
+}
+
+static int configureInvalidRequests(io_connect_t client) {
+    unsigned passed = 0, failed = 0;
+    auto check = [&](const char *name, kern_return_t got) {
+        if (got == kIOReturnBadArgument) ++passed;
+        else { ++failed; fprintf(stderr, "%s: 0x%x\n", name, got); }
+    };
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, ItlAwdlConfigureInspect, {0, 0}};
+    ItlAwdlNativeConfigureResponse out = {};
+    check("short input", configureInvoke(client, r, out, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeConfigure,
+        &out, sizeof(out), nullptr, nullptr));
+    check("short output", configureInvoke(client, r, out, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", configureInvoke(client, r, out)); r.version = 1;
+    r.operation = 2; check("operation", configureInvoke(client, r, out)); r.operation = 0;
+    r.reserved[0] = 1; check("reserved0", configureInvoke(client, r, out)); r.reserved[0] = 0;
+    r.reserved[1] = 1; check("reserved1", configureInvoke(client, r, out));
+    printf("{\"invalid_configure_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
+    return failed ? 1 : 0;
+}
+
+static int configureRun(io_connect_t client, uint32_t operation) {
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
+    ItlAwdlNativeConfigureResponse out = {};
+    auto result = configureInvoke(client, r, out);
+    if (result) { fprintf(stderr, "Native configure request: 0x%x\n", result); return 1; }
+    static const char *names[] = {
+#define ITL_NATIVE_REQUEST(name, type) #name,
+#define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) #name,
+#include "../AirportItlwm/AWDL/ItlAwdlNativeRequests.def"
+#undef ITL_NATIVE_REQUEST
+#undef ITL_NATIVE_IMPLEMENTED_REQUEST
+    };
+    static_assert(sizeof(names) / sizeof(names[0]) == 63, "24H32 backend trace names");
+    printf("{");
+#define FIELD(name) printf("\"" #name "\":%u,", out.name)
+    FIELD(version); FIELD(present); FIELD(attempted); FIELD(native_result);
+    FIELD(backend_before); FIELD(backend_after); FIELD(trace_count); FIELD(trace_dropped);
+    FIELD(interface_enabled); FIELD(tx_enabled); FIELD(rx_enabled); FIELD(bsd_present);
+#undef FIELD
+    printf("\"registry_id\":%llu,\"trace\":[", (unsigned long long)out.registry_id);
+    bool valid = !out.interface_enabled && !out.tx_enabled && !out.rx_enabled;
+    for (unsigned i = 0; i < out.trace_count; ++i) {
+        const auto &entry = out.trace[i];
+        const bool known = entry.vptr_offset >= 0xfa0 && entry.vptr_offset <= 0x1190 &&
+            (entry.vptr_offset & 7) == 0;
+        valid &= known;
+        printf("%s{\"vptr_offset\":%u,\"method\":\"%s\",\"result\":%u}", i ? "," : "",
+            entry.vptr_offset, known ? names[(entry.vptr_offset - 0xfa0) / 8] : "unknown", entry.result);
+    }
+    printf("],\"native_configuration_verified\":false,\"native_airdrop\":false}\n");
+    // Native errors are diagnostic data. A zero result with no backend calls
+    // can be a no-op; neither outcome asserts successful configuration.
+    return valid && (operation != ItlAwdlConfigureRun || (out.present && out.attempted)) ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     const bool selftest = argc == 2 && !strcmp(argv[1], "selftest");
     const bool denied = argc == 2 && !strcmp(argv[1], "denied");
@@ -195,6 +260,13 @@ int main(int argc, char **argv) {
     const bool startDeniedTest = argc == 2 && !strcmp(argv[1], "start-denied");
     const bool sessionSelftest = argc == 2 && !strcmp(argv[1], "session-selftest");
     const bool session = argc == 3 && !strcmp(argv[1], "session");
+    const bool configureSelftest = argc == 2 && !strcmp(argv[1], "configure-selftest");
+    const bool configure = argc == 3 && !strcmp(argv[1], "configure");
+    uint32_t configureOperation = ItlAwdlConfigureInspect;
+    if (configure) {
+        if (!strcmp(argv[2], "run")) configureOperation = ItlAwdlConfigureRun;
+        else if (strcmp(argv[2], "status")) configureOperation = 2;
+    }
     uint32_t operation = ItlAwdlNativeInspect;
     if (session) {
         if (!strcmp(argv[2], "create")) operation = ItlAwdlNativeCreate;
@@ -202,7 +274,8 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[2], "status")) operation = 3;
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
-    if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest) ||
+    if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
+         !configure && !configureSelftest) || (configure && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
@@ -211,6 +284,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: awdl_native_init selftest | denied | run ITERATIONS(1..8) STOP_AFTER(0..2)\n"
                         "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
                         "       awdl_native_init session-selftest | session status|create|retire\n"
+                        "       awdl_native_init configure-selftest | configure status|run\n"
                         "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
         return 2;
     }
@@ -232,6 +306,8 @@ int main(int argc, char **argv) {
     if (startSelftest) { int code = startInvalidRequests(client); IOServiceClose(client); return code; }
     if (startDeniedTest) { int code = startDenied(client); IOServiceClose(client); return code; }
     if (sessionSelftest) { int code = sessionInvalidRequests(client); IOServiceClose(client); return code; }
+    if (configureSelftest) { int code = configureInvalidRequests(client); IOServiceClose(client); return code; }
+    if (configure) { int code = configureRun(client, configureOperation); IOServiceClose(client); return code; }
     if (session) { int code = sessionRun(client, operation); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};

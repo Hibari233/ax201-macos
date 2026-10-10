@@ -183,6 +183,38 @@ backend call counts and unexpected BSD interfaces. A passing lifecycle probe
 does not establish a working radio or networking interface. There is still no
 queue/BSD registration, link enable or packet transport from this path.
 
+## Native configuration trace
+
+Root-only selector 26 and capability bit 65536 invoke the exported, non-virtual
+24H32 `IO80211AWDLPeerManager::configure()` once on the retained native object.
+The interface must be unpublished and disabled, without registered transport
+queues. The call runs under the existing radio gate from a userspace caller,
+not on the native work-queue thread. It does not change the native manager's
+private power/configuration fields or call operational enable.
+
+```
+sudo build/tools/awdl_native_init configure-selftest
+sudo build/tools/awdl_native_init session create
+sudo build/tools/awdl_native_init configure run
+sudo build/tools/awdl_native_init configure status
+```
+
+The result records up to 32 backend calls in order, their exact virtual-table
+offsets and return codes, with a dropped-entry count. It exposes no kernel
+pointers or payloads. Reopening the client and repeating `run` returns the saved
+result; it cannot repeat native configuration. The boot-scoped peer-manager
+creation restriction remains in force. Init-only contract checks exercise trace
+ordering and capacity, then clear that test trace without calling configure.
+
+Native configure can return zero without doing work when its own power state
+is zero or configuration was already attempted elsewhere. Zero is consequently
+not proof of successful configuration. In the audited native flow, the first
+fatal backend request is `setAWDL_BSSID`; the current implementation still
+returns unsupported. The trace is intended to verify which path the live
+manager takes before implementing more configuration and firmware operations.
+Normal Wi-Fi health and interface/queue-disabled state must be checked after
+the call. This diagnostic is not native AirDrop activation.
+
 ## Native packet prototype
 
 Selector 22 and capability bit 4096 add an isolated, root-only packet-pool

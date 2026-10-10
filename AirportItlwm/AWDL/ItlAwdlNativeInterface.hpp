@@ -36,6 +36,8 @@ public:
         const ItlAwdlNativeTransportRequest *, ItlAwdlNativeTransportResponse *);
     static IOReturn managedBSD(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeBSDRequest *, ItlAwdlNativeBSDResponse *);
+    static IOReturn probeConfiguration(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeConfigureResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -57,14 +59,25 @@ public:
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \
-        ++backendCalls; \
-        return data ? kIOReturnUnsupported : kIOReturnBadArgument; \
+        return backendResult(Backend_##name, data ? kIOReturnUnsupported : kIOReturnBadArgument); \
     }
 #define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) IOReturn name(type *data) override;
 #include "ItlAwdlNativeRequests.def"
 #undef ITL_NATIVE_REQUEST
 #undef ITL_NATIVE_IMPLEMENTED_REQUEST
 private:
+    enum BackendIndex {
+#define ITL_NATIVE_REQUEST(name, type) Backend_##name,
+#define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) Backend_##name,
+#include "ItlAwdlNativeRequests.def"
+#undef ITL_NATIVE_REQUEST
+#undef ITL_NATIVE_IMPLEMENTED_REQUEST
+        BackendCount
+    };
+    static_assert(BackendCount == 63, "24H32 backend trace indices");
+    IOReturn backendResult(BackendIndex, IOReturn);
+    bool configurationTracing;
+    ItlAwdlNativeConfigureResponse configurationResult;
     ItlAwdl::ActionTemplate syncTemplate;
     IO80211Controller *controller;
     bool virtualInitAttempted;

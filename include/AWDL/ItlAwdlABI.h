@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -171,6 +171,21 @@ struct ItlAwdlNativeBSDResponse {
     uint64_t registry_id;
     char bsd_name[16];
 };
+// One native configure() call on the retained, unpublished, disabled object.
+// Repeating run returns the saved result, without another native invocation.
+// The backend still refuses RF enable; native_result == 0 can be a no-op
+// (e.g. the native manager is not powered), never proof of configuration.
+enum ItlAwdlNativeConfigureOperation { ItlAwdlConfigureInspect, ItlAwdlConfigureRun };
+enum { ITL_AWDL_CONFIGURE_TRACE_COUNT = 32 };
+struct ItlAwdlNativeConfigureRequest { uint32_t version, operation, reserved[2]; };
+struct ItlAwdlNativeBackendTrace { uint32_t vptr_offset, result; };
+struct ItlAwdlNativeConfigureResponse {
+    uint32_t version, present, attempted, native_result;
+    uint32_t backend_before, backend_after, trace_count, trace_dropped;
+    uint32_t interface_enabled, tx_enabled, rx_enabled, bsd_present;
+    uint64_t registry_id;
+    ItlAwdlNativeBackendTrace trace[ITL_AWDL_CONFIGURE_TRACE_COUNT];
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -210,6 +225,9 @@ static_assert(sizeof(ItlAwdlNativePacketResponse) == 80, "native packet response
 static_assert(ItlAwdlNativeBSD == 25, "append-only native BSD ABI");
 static_assert(sizeof(ItlAwdlNativeBSDRequest) == 16, "native BSD request ABI");
 static_assert(sizeof(ItlAwdlNativeBSDResponse) == 112, "native BSD response ABI");
+static_assert(ItlAwdlNativeConfigure == 26, "append-only native configure ABI");
+static_assert(sizeof(ItlAwdlNativeConfigureRequest) == 16, "native configure request ABI");
+static_assert(sizeof(ItlAwdlNativeConfigureResponse) == 312, "native configure response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
 static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
 static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");
