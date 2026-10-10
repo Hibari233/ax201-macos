@@ -142,11 +142,49 @@ The later [native backend audit](SEQUOIA-AWDL-BACKEND.md) corrected two request
 extents and compiled successfully. That audit is not runtime native-interface
 validation and is not part of this exact installed binary's evidence.
 
+## Revision 12 native initialization validation (2026-10-10)
+
+The same AX201 / Sequoia 24H32 machine booted the native initialization probe
+from `1ec3158db9a80d8de74ec1dff80e5567c814d72f`:
+
+- Binary SHA-256: `67a241e3a911930a2abb7f6c7e50dc93a0ab9d76c9326bdd2cb7972d70b15609`
+- Loaded UUID: `7664C1EC-ADC3-33EB-B5C4-B4DB56BDCC3D`
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38031186391)
+  passed Linux ASan/UBSan, both Sequoia builds, the native ABI fixture and all
+  three diagnostic clients. The staged kext passed strict signature verification;
+  revision 11 remains available for rollback.
+
+Each stop-after phase ran once, then eight times in one gated request:
+
+| Phase | Objects created / released | Controller opens / closes | Contract checks |
+| --- | ---: | ---: | ---: |
+| Base initialization only | 9 / 9 | 0 / 0 | 0 |
+| Role-6 virtual initialization | 9 / 9 | 9 / 9 | 0 |
+| Virtual initialization and dispatch contract | 9 / 9 | 9 / 9 | 1,152 |
+
+All requests reported zero live probe instances before/after, no remaining
+controller open, no method failures and no initialization error. Eight malformed
+request checks passed. A non-root client was denied after successful root access
+to the same loaded driver. The contract checks exercise null/non-null dispatch
+through the 63 unsupported backend methods, the unsupported MAC setter, and the
+corrected by-value self-address getter. These bounded observations do not prove
+all native allocations are leak-free, and phase exits do not inject allocation
+failures into Apple's code.
+
+Ordinary WPA2 remained associated throughout; the post-test Wi-Fi route passed
+10/10 router pings. GPU binary hashes/settings, display-power error counters and
+the 240 Hz display mode passed the retained health checks. A temporary six-hour
+awake assertion was active; true system sleep was not tested.
+
+Only initialization and disposal are qualified here. `start()` remains disabled:
+there is no started peer manager, native BSD interface, new radio operation or
+AirDrop file-transfer result.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Revisions 10 and 11 identities verified above; release matrix remains incomplete |
+| Fresh public-fork binary boot and loaded-hash verification | Revisions 10–12 identities verified above; release matrix remains incomplete |
 | WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 10/10 final Wi-Fi pings; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
@@ -154,6 +192,7 @@ validation and is not part of this exact installed binary's evidence.
 | Peer AWDL RX while STA stays associated on the same channel | Pending |
 | Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
+| Native role-6 object initialization/disposal | 27 bounded cycles passed; start, queues and BSD registration still pending |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |

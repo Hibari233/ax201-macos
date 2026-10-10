@@ -29,6 +29,7 @@ An Apple Silicon Mac can cross-compile the kext but cannot load this x86_64 driv
 | Passive AWDL IPv6 reception | Revision 10 received owned-peer traffic on channel 149; 108 packets of 1280 bytes passed transport checksums; diagnostic only |
 | Fixed AWDL data transmission | Revision 11 obtained bounded firmware completions for 64/1280/1500-byte probes; zero valid echo replies, no bidirectional IPv6 yet |
 | AWDL diagnostics while connected to Wi-Fi | Lifecycle/restoration tested; reception from a peer on the same channel still unvalidated |
+| Native AWDL object lifecycle | Revision 12 passed 27 bounded initialization/disposal cycles; native start and packet queues remain unimplemented |
 | Native `awdl0`, bidirectional peer IPv6, AirDrop transfer | Not implemented |
 | Sleep/wake, roaming, sustained throughput | Not yet qualified for release |
 | Tahoe and other Intel adapters | Inherited source retained; not part of this fork's initial validation claim |
