@@ -1011,3 +1011,28 @@ No native interface, queue, discovery or AirDrop transfer was enabled. The next
 controlled change follows Intel's non-STA Smart FIFO policy rather than using
 the associated-station policy for this listener. This remains a hypothesis to
 test, not a confirmed explanation of actual RF timing.
+
+## Non-STA Smart FIFO policy — 2026-10-10
+
+Source `b1e290663b3e9a27d7e9eab2e2e33e9deed7455f` (revision 39):
+
+- Binary SHA-256: `350c295f4950ea21894707b5cf42065f9baad578adec881d9535af2b94a0295e`
+- Loaded UUID: `ECBEDD49-D932-36C5-9EEB-85D2AED02267`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38059045931)
+  passed all three jobs. Local UBSan and both native ABI comparisons passed;
+  installation retained a verified revision 38 rollback.
+
+All 384 initialization contracts, native configuration/template and two passive
+RF regressions passed. Under the corrected non-STA Smart FIFO policy, the next
+TX trial still stopped after one successful firmware completion at **27,174 us**.
+The matching DMA response was observed 26,795 us after the doorbell, the
+interrupt filter at 27,081 us, and completion processing 54 us after that filter.
+Firmware reported 168 us media duration, no retries and no Bluetooth kills.
+
+This result remains within the range of earlier failures; it does not establish
+a latency improvement. No extra frame was submitted and no pending or aborted
+TX remained. WPA2 restoration passed (36/36 router pings), and before/after
+health assertions passed. The same native manager remained disabled and
+unpublished. No native RX delivery, peer discovery or AirDrop transfer occurred.
+Further identical TX trials are deferred while native timing-parameter and
+timeline integration is audited. The 5 ms guard has not been relaxed.
