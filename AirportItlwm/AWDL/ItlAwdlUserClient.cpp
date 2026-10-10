@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "ItlAwdlUserClient.hpp"
 #include "AirportItlwmV2.hpp"
+#include "ItlAwdlNativeInterface.hpp"
 
 OSDefineMetaClassAndStructors(ItlAwdlUserClient, IOUserClient)
 
@@ -55,6 +56,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {readData, 0, 0, 0, sizeof(ItlAwdlDataResponse)},
         {dataStatus, 0, 0, 0, sizeof(ItlAwdlDataStatusResponse)},
         {dataProbe, 0, sizeof(ItlAwdlDataProbeRequest), 0, 0},
+        {nativeInit, 0, sizeof(ItlAwdlNativeInitRequest), 0, sizeof(ItlAwdlNativeInitResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -67,6 +69,12 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
 IOReturn ItlAwdlUserClient::status(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
     return self->radio->awdlCommand(self, ItlAwdlStatus, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::nativeInit(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeInitialization(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeInitRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeInitResponse *>(a->structureOutput));
 }
 IOReturn ItlAwdlUserClient::begin(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);

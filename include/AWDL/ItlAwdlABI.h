@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -78,6 +78,17 @@ struct ItlAwdlDataStatusResponse {
 struct ItlAwdlDataProbeRequest {
     uint32_t version, length, token, reserved; // IPv6 length 64..1500; nonzero run token.
 };
+// No radio operations or published BSD interface. Each object is disposed
+// before returning. stop_after: 0 full init, 1 after base init, 2 after VIF init.
+// The two early exits exercise cleanup, not allocation failure inside Apple code.
+struct ItlAwdlNativeInitRequest {
+    uint32_t version, iterations, stop_after, reserved;
+};
+struct ItlAwdlNativeInitResponse {
+    uint32_t version, attempted, base_initialized, virtual_initialized;
+    uint32_t released, live_before, live_after, role;
+    uint32_t methods_checked, method_failures, provider_open_after, last_error;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -102,6 +113,9 @@ struct ItlAwdlRunStatusResponse {
 #ifdef __cplusplus
 static_assert(sizeof(ItlAwdlBeginRequest) == 24, "AWDL request ABI");
 static_assert(sizeof(ItlAwdlDataProbeRequest) == 16, "AWDL fixed echo request ABI");
+static_assert(sizeof(ItlAwdlNativeInitRequest) == 16, "native init request ABI");
+static_assert(sizeof(ItlAwdlNativeInitResponse) == 48, "native init response ABI");
+static_assert(ItlAwdlDataProbe == 18 && ItlAwdlNativeInit == 19, "append-only native init ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");

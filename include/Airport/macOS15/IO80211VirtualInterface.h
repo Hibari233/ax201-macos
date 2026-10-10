@@ -195,6 +195,16 @@ public:
     private: virtual void _RESERVEDIO80211VirtualInterface14(); public:
     // vptr + 0xf98: IO80211VirtualInterface::_RESERVEDIO80211VirtualInterface15()
     private: virtual void _RESERVEDIO80211VirtualInterface15(); public:
+public:
+    // Nonvirtual native helper, independently inspected in 24H32. It frees
+    // the BPF list/lock acquired by init(); free() alone does not free them.
+    void freeBpfResources();
+protected:
+    bool hasNativeVirtualStorage() const {
+        void *storage = nullptr;
+        memcpy(&storage, _virtualLayout, sizeof(storage));
+        return storage != nullptr;
+    }
 private:
     uint8_t _virtualLayout[8]; // Expansion pointer at 0x118.
 };

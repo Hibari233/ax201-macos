@@ -199,6 +199,9 @@ private: virtual void _abi_0dc0() __asm__("__ZN17IO80211Controller16CreatePostOf
     virtual IO80211VirtualInterface* createVirtualInterface(ether_addr*, unsigned int);
     virtual bool attachVirtualInterface(IO80211VirtualInterface**, ether_addr*, unsigned int, bool);
     virtual bool detachVirtualInterface(IO80211VirtualInterface*, bool);
+    // Nonvirtual 24H32 accessors; no vtable slots are added.
+    IO80211VirtualInterface *getAwdlInterface();
+    void setAwdlInterface(IO80211VirtualInterface*);
     virtual void _RESERVEDIO80211Controller0();
     virtual void _RESERVEDIO80211Controller1();
     virtual void _RESERVEDIO80211Controller2();

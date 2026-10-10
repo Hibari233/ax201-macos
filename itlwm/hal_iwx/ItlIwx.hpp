@@ -153,6 +153,8 @@ class ItlIwx : public ItlHalService, ItlDriverInfo, ItlDriverController {
 public:
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     IOReturn awdlCommand(OSObject *, uint32_t, const void *, void *);
+    // Keep native init/dispose serialized with radio diagnostics and detach.
+    friend class ItlAwdlNativeInterface;
     bool awdlActive() const { return awdl.session == ItlAwdlStarting || awdl.session == ItlAwdlListening; }
     bool awdlLinked() const { return awdl.linked && awdlActive(); }
     bool awdlCommandBusy() const { return awdl.commandBusy; }

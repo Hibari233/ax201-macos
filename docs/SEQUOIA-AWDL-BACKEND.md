@@ -16,6 +16,55 @@ not override that factory; legacy non-WCL virtual-interface code is not a
 working Sequoia backend. Reusing legacy role values without checking this
 build would select the wrong native object.
 
+`IO80211SkywalkInterface::start()` sets and retains the controller/work queue,
+then calls `createPeerManager()`. The role-6 branch creates Apple's AWDL peer
+manager and sets the controller's AWDL interface pointer. This is separate from
+queue registration and from implementing the hardware backend. The controller's
+nonvirtual `getAwdlInterface()` / `setAwdlInterface()` accessors were independently
+checked; they do not add vtable slots.
+
+Partial initialization needs different cleanup from a started interface:
+
+- `VirtualInterface::init()` registers power interest, opens the controller,
+  and allocates BPF resources. Its `free()` alone does not balance those steps.
+- `SkywalkInterface::stop()` assumes a peer manager exists. It must not be
+  used as cleanup for an object whose `start()` was never called.
+- `SkywalkInterface::free()` dereferences its expansion pointer before its
+  null check. A subclass must use the lower base's cleanup if initialization
+  failed before that storage was allocated. The lower bases were checked for
+  absent storage and unregistered queues.
+- `VirtualInterface::freeBpfResources()` frees its BPF lock without clearing
+  the lock pointer. Call it once, not again through an additional `stop()`.
+
+## Bounded native initialization probe
+
+The experimental `awdl` build now includes `ItlAwdlNativeInterface`, a concrete
+subclass of `IO80211AWDLProtocol`. Root-only selector 19 initializes and disposes
+1–8 instances under the same gate as radio diagnostics. It refuses another OS
+build (only 24H32 is audited), another PCI device, an active radio diagnostic,
+an existing AWDL interface, or a leaked prior probe object. Nothing calls it at
+boot. Capability bit 512 means this probe exists, not that AirDrop works.
+
+```
+sudo build/tools/awdl_native_init selftest
+sudo build/tools/awdl_native_init run 1 1  # base init, cleanup
+sudo build/tools/awdl_native_init run 1 2  # virtual init, cleanup
+sudo build/tools/awdl_native_init run 1 0  # full init + unsupported-method checks
+```
+
+Stop-after phases exercise the wrapper's early exits; they do not simulate an
+allocation failure inside Apple's code. Successful results require zero live
+objects after release, no remaining controller open, and no method failures.
+The complete phase also checks virtual dispatch through all 63 native backend
+methods using null and non-null opaque pointers, plus `setMacAddress`. The
+unimplemented methods return explicit errors and do not inspect request bytes.
+
+This stage deliberately rejects `start()`: no peer manager, BSD `awdl0`, packet
+queues, RF changes, or native AirDrop capability are registered. The compiled
+class's 560 vtable entries (including the 63 backend slots) were compared with
+24H32; no slot/symbol mismatch was found. Runtime evidence is recorded separately
+in `VALIDATION.md` when available.
+
 ## Request extents
 
 | Request | Observed requirement | Evidence in 24H32 |
@@ -40,7 +89,7 @@ return success for unimplemented firmware operations, and not proof that all
 values; changing return conventions globally would lose these specific native
 fallbacks.
 
-Next: audit initialization and teardown, remaining required request sizes,
+Next: integrate started-interface teardown, remaining required request sizes,
 action/data output ownership, firmware MAC/PHY contexts, and native RX queue
 metadata before instantiating and registering an interface. Default capability
 bits must continue to describe the implemented Wi-Fi driver, not an unverified

@@ -196,6 +196,16 @@ private: virtual void _abi_0e48() __asm__("__ZN23IO80211SkywalkInterface20getNCl
 private: virtual void _abi_0e50() __asm__("__ZN23IO80211SkywalkInterface18getLastTxTimeStampERy"); public:
 private: virtual void _abi_0e58() __asm__("__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"); public:
 private: uint8_t _layout[0x118 - sizeof(IOSkywalkEthernetInterface)];
+protected:
+    // 24H32: the sole field at 0x110 is the native expansion pointer.
+    // free() dereferences it before its null check. A subclass whose init()
+    // failed must select the lower base's free() when this storage is absent.
+    bool hasNativeSkywalkStorage() const {
+        void *storage = nullptr;
+        static_assert(sizeof(_layout) == sizeof(storage), "Sequoia expansion pointer");
+        memcpy(&storage, _layout, sizeof(storage));
+        return storage != nullptr;
+    }
 public:
     OSString *setInterfaceRole(unsigned int);
     void *setInterfaceId(unsigned int);
