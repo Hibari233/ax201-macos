@@ -356,15 +356,17 @@ static int templateRun(io_connect_t client, uint32_t operation) {
 }
 
 static kern_return_t radioInvoke(io_connect_t client, const ItlAwdlBeginRequest &r,
-    ItlAwdlNativeRadioResponse &out, size_t in = sizeof(ItlAwdlBeginRequest),
-    size_t size = sizeof(ItlAwdlNativeRadioResponse)) {
+    ItlAwdlNativeRadioResponse &out, bool p2p = false) {
     memset(&out, 0, sizeof(out));
-    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeRadio, &r, in, &out, &size);
+    size_t size = sizeof(out);
+    auto result = IOConnectCallStructMethod(client, p2p ? ItlAwdlNativeP2pRadio : ItlAwdlNativeRadio,
+        &r, sizeof(r), &out, &size);
     if (!result && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION)) return kIOReturnBadArgument;
     return result;
 }
-static int radioInvalidRequests(io_connect_t client, bool transmit = false, bool unicast = false) {
-    const uint32_t method = unicast ? ItlAwdlNativeUnicastTx : (transmit ? ItlAwdlNativeSyncTx : ItlAwdlNativeRadio);
+static int radioInvalidRequests(io_connect_t client, bool transmit = false, bool unicast = false, bool p2p = false) {
+    const uint32_t method = p2p ? ItlAwdlNativeP2pRadio :
+        (unicast ? ItlAwdlNativeUnicastTx : (transmit ? ItlAwdlNativeSyncTx : ItlAwdlNativeRadio));
     const size_t responseSize = transmit ? sizeof(ItlAwdlNativeSyncTxResponse) : sizeof(ItlAwdlNativeRadioResponse);
     unsigned passed = 0, failed = 0;
     auto check = [&](const char *name, kern_return_t got) {
@@ -430,11 +432,13 @@ static bool radioOkay(const ItlAwdlNativeRadioResponse &out) {
         out.creation_before == out.creation_after && !out.interface_enabled &&
         !out.tx_enabled && !out.rx_enabled && !out.bsd_present;
 }
-static int radioRun(io_connect_t client, const ItlAwdlBeginRequest &request) {
+static int radioRun(io_connect_t client, const ItlAwdlBeginRequest &request, bool p2p = false) {
     ItlAwdlNativeRadioResponse out = {};
-    auto result = radioInvoke(client, request, out);
+    auto result = radioInvoke(client, request, out, p2p);
     if (result) { fprintf(stderr,"Native radio request: 0x%x\n",result); return 1; }
-    printRadio(out,true); printf("\n");
+    // P2P-device firmware may autonomously ACK addressed management frames;
+    // absence of host-submitted TX does not establish RF silence.
+    printRadio(out,!p2p); printf("\n");
     return radioOkay(out) ? 0 : 1;
 }
 static int syncTxRun(io_connect_t client, const ItlAwdlBeginRequest &request, bool unicast = false) {
@@ -474,6 +478,8 @@ int main(int argc, char **argv) {
     const bool templateRequest = argc == 3 && !strcmp(argv[1], "template");
     const bool radioSelftest = argc == 2 && !strcmp(argv[1], "radio-selftest");
     const bool radioRequest = argc == 4 && !strcmp(argv[1], "radio");
+    const bool p2pRadioSelftest = argc == 2 && !strcmp(argv[1], "p2p-radio-selftest");
+    const bool p2pRadioRequest = argc == 4 && !strcmp(argv[1], "p2p-radio");
     const bool syncTxSelftest = argc == 2 && !strcmp(argv[1], "sync-tx-selftest");
     const bool syncTxRequest = argc == 4 && !strcmp(argv[1], "sync-tx");
     const bool unicastSelftest = argc == 2 && !strcmp(argv[1], "sync-unicast-selftest");
@@ -492,8 +498,8 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest) ||
-        ((radioRequest || syncTxRequest || unicastRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
+         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !p2pRadioSelftest && !p2pRadioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest) ||
+        ((radioRequest || p2pRadioRequest || syncTxRequest || unicastRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
                          radioInput.dwell_ms < 1000 || radioInput.dwell_ms > 5000)) ||
         ((configure || templateRequest || timingRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
@@ -508,6 +514,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init timing-selftest | timing status|run\n"
                         "       awdl_native_init template-selftest | template status|run\n"
                         "       awdl_native_init radio-selftest | radio OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
+                        "       awdl_native_init p2p-radio-selftest | p2p-radio OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "       awdl_native_init sync-tx-selftest | sync-tx OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "       awdl_native_init sync-unicast-selftest | sync-unicast OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
@@ -543,6 +550,8 @@ int main(int argc, char **argv) {
     if (unicastRequest) { int code = syncTxRun(client,radioInput,true); IOServiceClose(client); return code; }
     if (radioSelftest) { int code = radioInvalidRequests(client); IOServiceClose(client); return code; }
     if (radioRequest) { int code = radioRun(client, radioInput); IOServiceClose(client); return code; }
+    if (p2pRadioSelftest) { int code = radioInvalidRequests(client,false,false,true); IOServiceClose(client); return code; }
+    if (p2pRadioRequest) { int code = radioRun(client,radioInput,true); IOServiceClose(client); return code; }
     if (session) { int code = sessionRun(client, operation); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};

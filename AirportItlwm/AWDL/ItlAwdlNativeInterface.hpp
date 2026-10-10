@@ -47,7 +47,7 @@ public:
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTimingResponse *);
     static IOReturn probeRadio(AirportItlwm *, ItlIwx *,
         const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr,
-        bool unicast = false);
+        bool unicast = false, bool p2p = false);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;

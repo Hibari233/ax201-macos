@@ -7593,6 +7593,12 @@ iwx_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
         else
             IEEE80211_ADDR_COPY(&add_sta_cmd.addr,
                                 in->in_macaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // The P2P device uses a broadcast station, not the listener's
+        // zero-address sniffer station. Both use GENERAL_PURPOSE + MGMT_TID.
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification && ic->ic_opmode == IEEE80211_M_MONITOR)
+            IEEE80211_ADDR_COPY(&add_sta_cmd.addr,etherbroadcastaddr);
+#endif
     }
     add_sta_cmd.add_modify = update ? 1 : 0;
     add_sta_cmd.station_flags_msk
@@ -8755,18 +8761,22 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
     else
         panic("unsupported operating mode %d\n", ic->ic_opmode);
     cmd->tsf_id = htole32(IWX_TSF_ID_A);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (ic->ic_opmode == IEEE80211_M_MONITOR && awdlNativeRadioOwner && awdlNativeP2pQualification)
+        cmd->mac_type = htole32(IWX_FW_MAC_TYPE_P2P_DEVICE);
+#endif
     
     IEEE80211_ADDR_COPY(cmd->node_addr, ic->ic_myaddr);
     if (ic->ic_opmode == IEEE80211_M_MONITOR) {
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-        if (awdlNativeRadioOwner && awdlNativeTxQualification)
+        if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification))
             IEEE80211_ADDR_COPY(cmd->node_addr,awdlNativeAddress);
 #endif
         IEEE80211_ADDR_COPY(cmd->bssid_addr, etherbroadcastaddr);
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-        if (awdlNativeRadioOwner && awdlNativeTxQualification) {
-            // A listener that injects frames still needs a populated MAC TX
-            // context, as in iwlwifi's mac_ctxt_cmd_listener/common path.
+        if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification)) {
+            // Listener TX and a P2P MAC (with autonomous ACKs) both need a
+            // populated context, as in iwlwifi's mac_ctxt_cmd_common path.
             // There is no associated BSS: use mandatory fallback rates and
             // standard OFDM EDCA, not the previous infrastructure AP's state.
             cmd->cck_rates = htole32(IEEE80211_IS_CHAN_2GHZ(ic->ic_ibss_chan) ? 1 : 0);
@@ -8906,6 +8916,12 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
                                     IWX_MAC_FILTER_IN_BEACON |
                                     IWX_MAC_FILTER_IN_PROBE_REQUEST |
                                     IWX_MAC_FILTER_IN_CRC32);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // Observe action/control traffic and preserve the monitor decoder's
+        // explicit FCS contract. P2P qualification does not need data promiscuity.
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification)
+            cmd.filter_flags &= ~htole32(IWX_MAC_FILTER_IN_PROMISC);
+#endif
     } else if (!assoc || !ni->ni_associd || !ni->ni_dtimperiod)
     /*
      * Allow beacons to pass through as long as we are not
@@ -9766,12 +9782,12 @@ iwx_auth(struct iwx_softc *sc)
     
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     // The non-MLO firmware reserves MAC0 for managed/IBSS interfaces (see
-    // iwlwifi's iwl_mvm_mac_ctxt_init). The bounded native TX listener owns
+    // iwlwifi's iwl_mvm_mac_ctxt_init). The bounded native TX/P2P lease owns
     // the only active MAC, so MAC1 is available. This is not a station/queue
     // ID. Binding, ADD_STA and power commands all consume in_id below.
     static_assert(IWX_NUM_MAC_INDEX_DRIVER > 1, "listener MAC context available");
     const uint16_t macId = ic->ic_opmode == IEEE80211_M_MONITOR &&
-        awdlNativeRadioOwner && awdlNativeTxQualification ? 1 : 0;
+        awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification) ? 1 : 0;
     const auto active = sc->sc_flags &
         (IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE);
     if (active && in->in_id != macId) return EBUSY;
@@ -10052,8 +10068,13 @@ iwx_run(struct iwx_softc *sc)
         }
     }
     
-    if (ic->ic_opmode == IEEE80211_M_MONITOR)
+    if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification)
+            return awdlStartNativeP2pSession();
+#endif
         return 0;
+    }
     
     /* Start at lowest available bit-rate. Firmware will raise. */
     in->in_ni.ni_txrate = 0;
@@ -10545,7 +10566,7 @@ iwx_sf_config(struct iwx_softc *sc, int new_state)
 {
     struct ieee80211com *ic = &sc->sc_ic;
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    if (awdlNativeRadioOwner && awdlNativeTxQualification &&
+    if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification) &&
         ic->ic_opmode == IEEE80211_M_MONITOR) {
         // Intel's sf_update uses UNINIT for a single non-STA MAC. FULL_ON
         // assumes an associated AP, which this explicit listener lease lacks.
@@ -11897,6 +11918,12 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             }
                 
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_NOTIF): {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                if (awdlNativeRadioOwner && awdlNativeP2pQualification) {
+                    awdlNativeP2pSession.observe(pkt->data,iwx_rx_packet_payload_len(pkt),sc->sc_generation);
+                    break;
+                }
+#endif
                 struct iwx_session_prot_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_session_prot_notif *);
                 if (!notif->status) {

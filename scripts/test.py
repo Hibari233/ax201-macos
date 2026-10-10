@@ -27,7 +27,7 @@ def main():
     if sanitizers != 'none':
         flags += ['-fsanitize=' + sanitizers, '-fno-omit-frame-pointer', '-fno-sanitize-recover=all']
     env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}
-    for name in ('parse_test', 'schedule_test', 'data_test', 'echo_test', 'native_frame_test', 'template_test', 'native_event_test', 'sync_action_test', 'native_channel_test', 'local_timeline_test', 'tx_completion_test', 'native_timing_test'):
+    for name in ('parse_test', 'schedule_test', 'data_test', 'echo_test', 'native_frame_test', 'template_test', 'native_event_test', 'sync_action_test', 'native_channel_test', 'local_timeline_test', 'tx_completion_test', 'native_timing_test', 'roc_test'):
         binary = out / name
         print(f'Compile {name} (sanitizers: {sanitizers})', flush=True)
         subprocess.run([*compiler, *flags, str(ROOT / 'tests' / 'awdl' / (name + '.cpp')),

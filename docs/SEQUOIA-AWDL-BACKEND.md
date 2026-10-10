@@ -982,3 +982,32 @@ requests and encoder disagreement. Actual native round-trip and passive radio
 qualification must be recorded separately. The failed 5 ms TX timing guard is
 unchanged, and no repeated TX trial is justified solely by staging the same
 default values.
+
+### Exclusive P2P-device receive qualification
+
+Root-only selector 32 / capability bit 2097152 adds `p2p-radio-selftest` and
+`p2p-radio OWNED_PEER_MAC DWELL_MS`, with a 1000–5000 ms bound. It uses the
+already configured, unpublished native object and refuses an active STA.
+Unlike the listener trials, it creates firmware MAC 1 as `P2P_DEVICE` and
+uses a broadcast-address general-purpose station. The management TID and
+queue allocation remain unchanged. The decoder retains its explicit FCS
+contract and management/control filtering; data promiscuity is unnecessary.
+
+The session follows Intel's [P2P remain-on-channel implementation](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/mvm/time-event.c):
+`SESSION_PROTECTION_CMD` with discovery configuration 2, a duration bounded
+by the remaining lease, and readiness only after the corresponding successful
+START notification. The diagnostic requires advertised command version 1,
+notification version 2, the firmware capability, and an active channel without
+passive/DFS restrictions. Unknown layouts fail closed. Notifications validate
+size, MAC, configuration, boolean fields and firmware generation; END or failure
+prevents a late START from reviving the session.
+
+No host frames are submitted by this selector. P2P firmware can nevertheless
+send autonomous ACKs, so its output does not claim RF silence. Stop and expiry
+use the existing exclusive radio teardown, which stops the firmware and
+restores MAC identity 0 before normal STA operation. Numeric properties retain
+command/notification versions, START/END counts, failures, stopped state and
+host TX count for review. The listener selectors are preserved, with the
+pre-existing 20 ms GP2 read cadence restored after the unsuccessful 2 ms trial.
+This is a radio lifecycle preflight; native SYNC, BSD publication and queues
+remain disabled. Hardware results belong in `VALIDATION.md`.

@@ -42,7 +42,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 2097151; // Adds bounded owned-peer unicast MIF diagnostic. No native AirDrop.
+            out->capabilities = 4194303; // Bit 21: exclusive P2P-device RX trial. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -208,6 +208,8 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     awdlNativePeerProfile = {};
     awdlNativePeerProfileSamples = 0;
     awdlObservedReservation = {};
+    awdlNativeP2pSession = {};
+    awdlNativeP2pCommandVersion = awdlNativeP2pNotifVersion = 0;
     bzero(&awdl.tx, sizeof(awdl.tx));
     awdl.lastPeerRxUs = awdl.lastProbeUs = 0;
     awdl.lastPeerGp2 = 0;
@@ -288,6 +290,9 @@ void ItlIwx::awdlStop(uint32_t reason, uint32_t error) {
     if (!awdlActive()) return;
     __atomic_store_n(&awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
     awdl.session = ItlAwdlStopping;
+    // This exclusive lease ends through iwx_stop/stop_device below, which
+    // removes the entire firmware context, including its session protection.
+    awdlNativeP2pSession.stop();
     ++awdl.epoch;
     awdl.run.active = 0;
     if (awdl.pendingWindow) ++awdl.run.cancelled;
@@ -698,6 +703,60 @@ void ItlIwx::awdlPublishNativePeerProfile(IORegistryEntry *owner) {
         entry->setObject("channel_opclass",plan); plan->release();
     }
     owner->setProperty("AX201NativePeerProfile",entry); entry->release();
+}
+
+int ItlIwx::awdlStartNativeP2pSession() {
+    static_assert(ItlAwdl::P2pSessionProtection::MacId == 1 &&
+        ItlAwdl::P2pSessionProtection::Configuration == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV,
+        "P2P notification identity matches the firmware command");
+    auto in = reinterpret_cast<iwx_node *>(com.sc_ic.ic_bss);
+    if (!awdlNativeRadioOwner || !awdlNativeP2pQualification || awdlNativeTxQualification ||
+        !in || in->in_id != ItlAwdl::P2pSessionProtection::MacId || in->in_color ||
+        com.sc_ic.ic_opmode != IEEE80211_M_MONITOR || !awdlActive()) return EINVAL;
+    awdlNativeP2pCommandVersion = iwx_lookup_cmd_ver(&com,IWX_MAC_CONF_GROUP,IWX_SESSION_PROTECTION_CMD);
+    awdlNativeP2pNotifVersion = iwx_lookup_notif_ver(&com,IWX_MAC_CONF_GROUP,IWX_SESSION_PROTECTION_NOTIF);
+    if (!isset(com.sc_enabled_capa,IWX_UCODE_TLV_CAPA_SESSION_PROT_CMD) ||
+        awdlNativeP2pCommandVersion != 1 || awdlNativeP2pNotifVersion != 2) return ENOTSUP;
+    // Firmware can autonomously ACK on a P2P MAC even though this trial has
+    // no host TX. Require its current active, non-passive, non-DFS channel.
+    const auto ic = &com.sc_ic;
+    if (!awdl.channel || awdl.channel > IEEE80211_CHAN_MAX ||
+        !isset(ic->ic_chan_active,awdl.channel) || !ic->ic_channels[awdl.channel].ic_freq ||
+        (ic->ic_channels[awdl.channel].ic_flags & (IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_DFS)))
+        return EPERM;
+    const auto now=awdlNowUs();
+    if (now>=awdl.deadlineUs || !awdlNativeP2pSession.arm(com.sc_generation,awdl.deadlineUs-now))
+        return ETIMEDOUT;
+    static_assert(sizeof(iwx_session_prot_cmd)==24 && sizeof(iwx_session_prot_notif)==16,
+        "P2P session-protection command v1 / notification v2");
+    iwx_session_prot_cmd command = {};
+    command.id_and_color=htole32(IWX_FW_CMD_ID_AND_COLOR(in->in_id,in->in_color));
+    command.action=htole32(IWX_FW_CTXT_ACTION_ADD);
+    command.conf_id=htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV);
+    command.duration_tu=htole32(awdlNativeP2pSession.durationTu);
+    const auto generation=com.sc_generation;
+    const auto error=iwx_send_cmd_pdu(&com,iwx_cmd_id(IWX_SESSION_PROTECTION_CMD,IWX_MAC_CONF_GROUP,0),
+        0,sizeof(command),&command);
+    if (error) awdlNativeP2pSession.fail();
+    if (generation!=com.sc_generation || !awdlActive()) return ECANCELED;
+    return error;
+}
+
+void ItlIwx::awdlPublishNativeP2pSession(IORegistryEntry *owner) {
+    if (!owner || !awdlNativeP2pQualification) return;
+    auto d=OSDictionary::withCapacity(12);
+    if (!d) return;
+    auto put=[&](const char *key,uint32_t value) {
+        auto n=OSNumber::withNumber(value,32);
+        if (n) { d->setObject(key,n); n->release(); }
+    };
+    const auto &s=awdlNativeP2pSession;
+    put("command_version",awdlNativeP2pCommandVersion); put("notification_version",awdlNativeP2pNotifVersion);
+    put("duration_tu",s.durationTu); put("start_notifications",s.starts); put("end_notifications",s.ends);
+    put("ignored_notifications",s.ignored); put("malformed_notifications",s.malformed);
+    put("failed",s.failed); put("active_after_stop",s.active); put("requested_after_stop",s.requested);
+    put("host_tx_submitted",awdl.tx.submitted); put("generation",s.generation);
+    owner->setProperty("AX201NativeP2pRadio",d); d->release();
 }
 
 IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {

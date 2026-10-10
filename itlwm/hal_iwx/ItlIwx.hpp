@@ -145,6 +145,7 @@
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlClock.h>
 #include <AWDL/AwdlRadioObservation.h>
+#include <AWDL/AwdlRoc.h>
 #include <IOKit/IOTimerEventSource.h>
 #endif
 
@@ -171,7 +172,11 @@ private:
     // permits TX. The probe retains this object through cleanup; userspace
     // cannot set or supply this identity.
     OSObject *awdlNativeRadioOwner = nullptr;
-    bool awdlNativeTxQualification = false;
+    bool awdlNativeTxQualification = false, awdlNativeP2pQualification = false;
+    ItlAwdl::P2pSessionProtection awdlNativeP2pSession;
+    uint32_t awdlNativeP2pCommandVersion = 0, awdlNativeP2pNotifVersion = 0;
+    int awdlStartNativeP2pSession();
+    void awdlPublishNativeP2pSession(IORegistryEntry *);
     uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
     uint32_t awdlNativeTxGp2 = 0, awdlNativeTimingSamples = 0, awdlNativeTimingInvalid = 0;
     uint32_t awdlNativeMaxCompletionUs = 0, awdlNativeLastRate = 0;

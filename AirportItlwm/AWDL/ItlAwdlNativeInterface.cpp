@@ -778,11 +778,11 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
 
 IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out, ItlAwdlNativeSyncTxResponse *tx,
-    bool unicast) {
+    bool unicast, bool p2p) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
         request->channel || request->reserved || request->padding[0] || request->padding[1] ||
         request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer) ||
-        (tx && out != &tx->radio) || (unicast && !tx))
+        (tx && out != &tx->radio) || (unicast && !tx) || (p2p && tx))
         return kIOReturnBadArgument;
     if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
     auto gate = radio->getMainCommandGate();
@@ -800,7 +800,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         uint32_t phase; int generation; bool finished;
         ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
         uint64_t nextClockHostUs;
-        bool timelineReady, sentWindow, unicast; uint16_t lastWindow;
+        bool timelineReady, sentWindow, unicast, p2p; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
         uint32_t alignedSamples, alignmentUnavailable, navDeferrals, maxNavRemainingUs;
         uint32_t macIdBefore, macIdDuring, macIdAfter, macContextSamples, macContextMismatches;
@@ -809,6 +809,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     call.parent = parent; call.radio = radio; call.request = request;
     call.out = out; call.generation = -1; call.tx = tx;
     call.unicast = unicast;
+    call.p2p = p2p;
     auto action = [](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
         auto c = static_cast<Call *>(argument);
         auto r = c->radio;
@@ -856,8 +857,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             // native/diagnostic exclusion. It cannot submit diagnostic TX.
             r->awdlNativeRadioOwner = o;
             r->awdlNativeTxQualification = c->tx != nullptr;
+            r->awdlNativeP2pQualification = c->p2p;
             r->awdlNativeRateMbps = c->tx ? o->minimumRateMbps : 0;
             bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
+            if (c->p2p) memcpy(r->awdlNativeAddress,o->selfAddress.ether_addr_octet,6);
             r->awdlNativeTimingSamples = r->awdlNativeTimingInvalid = r->awdlNativeMaxCompletionUs = 0;
             r->awdlNativeLastRate = r->awdlNativeTxGp2 = 0;
             if (c->tx) {
@@ -871,6 +874,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             out->attempted = 1;
             o->removeProperty("AX201NativePeerWindow");
             o->removeProperty("AX201NativePeerProfile");
+            o->removeProperty("AX201NativeP2pRadio");
             auto result = r->awdlBegin(o, &begin);
             if (c->tx) c->nextClockHostUs=r->awdlObserveNativeTxDma()+20000;
             if (result) { out->last_error = result; c->finished = true; }
@@ -887,6 +891,15 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 c->finished = true; return kIOReturnSuccess;
             }
             if (s.session != ItlAwdlListening) return kIOReturnSuccess;
+            if (c->p2p) {
+                if (r->awdlNativeP2pSession.failed) {
+                    out->last_error=kIOReturnIOError; c->finished=true; return kIOReturnSuccess;
+                }
+                if (r->awdlNativeP2pSession.ended) { c->finished=true; return kIOReturnSuccess; }
+                // A command ACK is insufficient: require a successful START
+                // notification for this MAC/configuration/firmware generation.
+                if (!r->awdlNativeP2pSession.ready(r->com.sc_generation)) return kIOReturnSuccess;
+            }
             if (c->generation < 0) c->generation = r->com.sc_generation;
             if (c->generation != r->com.sc_generation) {
                 out->last_error = kIOReturnAborted; c->finished = true; return kIOReturnSuccess;
@@ -896,7 +909,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             c->macIdDuring = in ? in->in_id : UINT32_MAX;
             ++c->macContextSamples;
             const uint32_t required = IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE;
-            if (!in || in->in_color || c->macIdDuring != (c->tx ? 1U : 0U) ||
+            if (!in || in->in_color || c->macIdDuring != (c->tx || c->p2p ? 1U : 0U) ||
                 (r->com.sc_flags & required) != required) {
                 ++c->macContextMismatches;
                 out->last_error = kIOReturnError; c->finished = true; return kIOReturnSuccess;
@@ -904,10 +917,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             if (c->tx) {
                 const auto now=r->awdlObserveNativeTxDma();
                 if (now<c->nextClockHostUs) return kIOReturnSuccess;
-                // Controlled timing experiment: a PRPH clock read grabs NIC
-                // access, unlike the passive CSR/DMA observation. Check if the
-                // prior 20 ms read cadence was affecting the pending TX.
-                c->nextClockHostUs=now+(s.tx.pending ? 2000 : 20000);
+                c->nextClockHostUs=now+20000;
             }
             ItlAwdlClockResponse clock = {};
             auto result = r->awdlReadClock(&clock);
@@ -966,7 +976,6 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                         (!c->sentWindow || window != c->lastWindow) && overlap && !navRemaining) {
                         auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us,c->unicast);
                         if (!sent) {
-                            c->nextClockHostUs=clock.host_end_us+2000;
                             if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
                             c->tx->last_counter = boundary.counter; ++c->tx->windows_used;
                             c->sentWindow = true; c->lastWindow = window;
@@ -988,8 +997,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 if (result && !out->last_error) out->last_error = result;
             }
             r->awdlPublishNativePeerProfile(o);
+            r->awdlPublishNativeP2pSession(o);
             r->awdlNativeRadioOwner = nullptr;
             r->awdlNativeTxQualification = false;
+            r->awdlNativeP2pQualification = false;
             bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
             r->awdlNativeRateMbps = 0;
         }
@@ -1051,10 +1062,9 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         call.phase = 1;
         // The independent radio timer also expires the lease. Sleeps happen
         // outside the gate, allowing RX, firmware completion and power teardown.
-        // In TX qualification, inspect completed DMA at 1 ms and read GP2 at
-        // 2 ms while a frame is pending (20 ms otherwise). GP2 reads can affect
-        // NIC access, so this is an active timing experiment. DMA observation
-        // never consumes a response. The TX completion limit is unchanged.
+        // In TX qualification, inspect completed DMA at 1 ms between the
+        // 20 ms clock/RF steps. DMA observation never consumes a response.
+        // The TX completion limit is unchanged.
         const uint32_t delayMs=tx ? 1 : 20;
         for (uint32_t elapsed = 0; !call.finished && elapsed < request->dwell_ms + 100; elapsed += delayMs) {
             IOSleep(delayMs);
@@ -2405,6 +2415,7 @@ void ItlAwdlNativeInterface::releaseManagedGated(AirportItlwm *parent) {
         radio->awdlCommand(object, ItlAwdlEnd, nullptr, nullptr);
         radio->awdlNativeRadioOwner = nullptr;
         radio->awdlNativeTxQualification = false;
+        radio->awdlNativeP2pQualification = false;
     }
     parent->nativeAwdlInterface = nullptr;
     object->stop(parent);
