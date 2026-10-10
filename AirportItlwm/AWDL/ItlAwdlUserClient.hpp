@@ -30,4 +30,7 @@ private:
     static IOReturn prepareCountry(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn beginLinked(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn linkedStatus(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn beginData(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn readData(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn dataStatus(OSObject *, void *, IOExternalMethodArguments *);
 };

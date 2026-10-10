@@ -2,6 +2,7 @@
 // Bounded single-peer AWDL radio diagnostics. Not a native AirDrop driver.
 #include "ItlIwx.hpp"
 #include <AWDL/AwdlFrame.h>
+#include <AWDL/AwdlData.h>
 #include <AWDL/AwdlRegulatory.h>
 #include <kern/clock.h>
 
@@ -36,7 +37,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 127; // Adds bounded linked-STA RX diagnostics. No AirDrop.
+            out->capabilities = 255; // Includes bounded IPv6 RX diagnostics. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -44,6 +45,25 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input));
         case ItlAwdlBeginLinked:
             return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input), true);
+        case ItlAwdlBeginData:
+            return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input), false, true);
+        case ItlAwdlDataStatus: {
+            if (!call->output) return kIOReturnBadArgument;
+            memcpy(call->output, &s.dataStatus, sizeof(s.dataStatus));
+            static_cast<ItlAwdlDataStatusResponse *>(call->output)->version = ITL_AWDL_ABI_VERSION;
+            return kIOReturnSuccess;
+        }
+        case ItlAwdlReadData: {
+            if (!call->output) return kIOReturnBadArgument;
+            bzero(call->output, sizeof(ItlAwdlDataResponse));
+            if (!s.owner || s.owner != call->owner) return kIOReturnNotPermitted;
+            if (!s.dataStatus.queued) return kIOReturnNotReady;
+            memcpy(call->output, &s.dataRing[s.dataHead], sizeof(*s.dataRing));
+            bzero(&s.dataRing[s.dataHead], sizeof(*s.dataRing));
+            s.dataHead = (s.dataHead + 1) % ITL_AWDL_RING_COUNT;
+            --s.dataStatus.queued;
+            return kIOReturnSuccess;
+        }
         case ItlAwdlLinkedStatus: {
             if (!call->output) return kIOReturnBadArgument;
             auto out = static_cast<ItlAwdlLinkedStatusResponse *>(call->output);
@@ -97,6 +117,8 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             s.count = s.head = 0;
             s.rejected = false;
             if (s.ring) bzero(s.ring, sizeof(*s.ring) * (ITL_AWDL_RING_COUNT + 1));
+            if (s.dataRing) bzero(s.dataRing, sizeof(*s.dataRing) * ITL_AWDL_RING_COUNT);
+            s.dataHead = s.dataStatus.queued = s.dataStatus.enabled = 0;
             return kIOReturnSuccess;
         case ItlAwdlReadRejected:
             if (!call->output) return kIOReturnBadArgument;
@@ -124,7 +146,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
     }
 }
 
-IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool linked) {
+IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool linked, bool data) {
     auto ic = &com.sc_ic;
     auto ifp = &ic->ic_ac.ac_if;
     if (!r || !owner || r->version != ITL_AWDL_ABI_VERSION || r->reserved ||
@@ -152,6 +174,9 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
         return kIOReturnBusy;
     if (!awdl.ring) awdl.ring = static_cast<ItlAwdlTimedFrameResponse *>(IOMalloc(sizeof(*awdl.ring) * (ITL_AWDL_RING_COUNT + 1)));
     if (!awdl.ring) return kIOReturnNoMemory;
+    if (data && !awdl.dataRing)
+        awdl.dataRing = static_cast<ItlAwdlDataResponse *>(IOMalloc(sizeof(*awdl.dataRing) * ITL_AWDL_RING_COUNT));
+    if (data && !awdl.dataRing) return kIOReturnNoMemory;
     if (!awdl.timer) {
         awdl.timer = IOTimerEventSource::timerEventSource(this, awdlTimeout);
         if (!awdl.timer) return kIOReturnNoMemory;
@@ -160,6 +185,10 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
         }
     }
     bzero(awdl.ring, sizeof(*awdl.ring) * (ITL_AWDL_RING_COUNT + 1));
+    if (awdl.dataRing) bzero(awdl.dataRing, sizeof(*awdl.dataRing) * ITL_AWDL_RING_COUNT);
+    bzero(&awdl.dataStatus, sizeof(awdl.dataStatus));
+    awdl.dataStatus.enabled = data;
+    awdl.dataHead = 0;
     awdl.rejected = false;
     awdl.head = awdl.count = 0;
     awdl.rxTotal = awdl.rxAwdl = awdl.rxPeer = awdl.rxDropped = awdl.rxInvalid = 0;
@@ -312,7 +341,7 @@ void ItlIwx::awdlFinishLinkedStop() {
 IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
-    if (awdl.linked) return kIOReturnUnsupported;
+    if (awdl.linked || awdl.dataStatus.enabled) return kIOReturnUnsupported;
     if (!scheduled && (awdl.commandBusy || awdl.run.active)) return kIOReturnBusy;
     if (scheduled && awdl.mccNeedsRefresh) return kIOReturnNotReady;
     if (awdl.session != ItlAwdlListening || ic->ic_opmode != IEEE80211_M_MONITOR ||
@@ -405,7 +434,7 @@ IOReturn ItlIwx::awdlRun(OSObject *owner, const ItlAwdlRunRequest *request) {
         request->reserved[1] || request->mode < ItlAwdlTestWake || request->mode > ItlAwdlTestHop)
         return kIOReturnBadArgument;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
-    if (awdl.linked) return kIOReturnUnsupported;
+    if (awdl.linked || awdl.dataStatus.enabled) return kIOReturnUnsupported;
     if (awdl.session != ItlAwdlListening) return kIOReturnNotReady;
     if (awdl.run.mode || awdl.commandBusy || awdl.tx.pending || awdl.tx.submitted) return kIOReturnBusy;
     if (request->mode == ItlAwdlTestProbe &&
@@ -713,16 +742,25 @@ void ItlIwx::awdlDetach() {
             IOFree(self->awdl.ring, sizeof(*self->awdl.ring) * (ITL_AWDL_RING_COUNT + 1));
             self->awdl.ring = nullptr;
         }
+        if (self->awdl.dataRing) {
+            bzero(self->awdl.dataRing, sizeof(*self->awdl.dataRing) * ITL_AWDL_RING_COUNT);
+            IOFree(self->awdl.dataRing, sizeof(*self->awdl.dataRing) * ITL_AWDL_RING_COUNT);
+            self->awdl.dataRing = nullptr;
+        }
+        self->awdl.dataHead = self->awdl.dataStatus.queued = self->awdl.dataStatus.enabled = 0;
         return kIOReturnSuccess;
     }, this);
 }
 
-void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2, uint64_t tsf) {
+void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2, uint64_t tsf, bool deaggregated) {
     ++awdl.rxTotal;
     size_t length = mbuf_pkthdr_len(m);
     // RX MPDUs are contiguous here. Reject unexpectedly fragmented buffers.
-    if (mbuf_len(m) != length || length < 29) return;
+    if (mbuf_len(m) != length || length < 24) return;
     auto bytes = static_cast<const uint8_t *>(mbuf_data(m));
+    if (awdl.dataStatus.enabled && channel == awdl.channel && ItlAwdl::equalMac(bytes + 10, awdl.peer))
+        awdlObserveData(bytes, length, channel, rssi, gp2, deaggregated);
+    if (length < 29) return;
     if (bytes[0] != 0xd0 || bytes[24] != 127 || bytes[25] != 0 ||
         bytes[26] != 0x17 || bytes[27] != 0xf2 || bytes[28] != 8) return;
     ++awdl.rxAwdl;
@@ -759,4 +797,31 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     frame.timestamp_us = awdl.lastPeerRxUs;
     memcpy(frame.frame, bytes, length);
     ++awdl.count;
+}
+
+void ItlIwx::awdlObserveData(const uint8_t *bytes, size_t length, uint32_t channel,
+                            int32_t rssi, uint32_t gp2, bool deaggregated) {
+    ItlAwdl::DataBatch batch = {};
+    auto result = ItlAwdl::decodeData(bytes, length, deaggregated, &batch);
+    auto &status = awdl.dataStatus;
+    if (result == ItlAwdl::DataResult::NotAwdl) return;
+    if (result == ItlAwdl::DataResult::Unsupported) { ++status.unsupported; return; }
+    if (result != ItlAwdl::DataResult::Valid) { ++status.malformed; return; }
+    // Reserve space for the whole aggregate; never expose partial delivery.
+    if (batch.count > ITL_AWDL_RING_COUNT - status.queued) {
+        status.dropped += uint32_t(batch.count); return;
+    }
+    const uint64_t now = awdlNowUs();
+    static_assert(ItlAwdl::DataMtu == ITL_AWDL_DATA_MTU, "RX MTU");
+    for (size_t i = 0; i < batch.count; ++i) {
+        const auto &packet = batch.packets[i];
+        auto &record = awdl.dataRing[(awdl.dataHead + status.queued) % ITL_AWDL_RING_COUNT];
+        bzero(&record, sizeof(record));
+        record.version = ITL_AWDL_ABI_VERSION;
+        record.length = uint32_t(packet.length); record.channel = channel; record.rssi_dbm = rssi;
+        record.timestamp_us = now; record.gp2_us = gp2; record.sequence = packet.sequence;
+        memcpy(record.source, packet.source, 6); memcpy(record.destination, packet.destination, 6);
+        memcpy(record.ipv6, packet.ipv6, packet.length);
+        ++status.queued; ++status.accepted;
+    }
 }

@@ -158,7 +158,7 @@ public:
     bool awdlCommandBusy() const { return awdl.commandBusy; }
     void awdlStop(uint32_t reason, uint32_t error = 0);
     void awdlDetach();
-    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t);
+    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t, bool);
     void awdlCountryHint(uint16_t, uint8_t);
 private:
     struct {
@@ -168,6 +168,9 @@ private:
         IOTimerEventSource *timer = nullptr;
         IOTimerEventSource *runTimer = nullptr;
         ItlAwdlTimedFrameResponse *ring = nullptr;
+        ItlAwdlDataResponse *dataRing = nullptr;
+        ItlAwdlDataStatusResponse dataStatus = {};
+        uint32_t dataHead = 0;
         uint32_t head = 0, count = 0, session = 0, channel = 0;
         uint32_t lastError = 0, stopReason = 0;
         uint64_t rxTotal = 0, rxAwdl = 0, rxPeer = 0, rxDropped = 0, rxInvalid = 0;
@@ -205,7 +208,8 @@ private:
     static IOReturn awdlCommandGated(OSObject *, void *, void *, void *, void *);
     static void awdlTimeout(OSObject *, IOTimerEventSource *);
     static void awdlRunTimeout(OSObject *, IOTimerEventSource *);
-    IOReturn awdlBegin(OSObject *, const ItlAwdlBeginRequest *, bool linked = false);
+    IOReturn awdlBegin(OSObject *, const ItlAwdlBeginRequest *, bool linked = false, bool data = false);
+    void awdlObserveData(const uint8_t *, size_t, uint32_t, int32_t, uint32_t, bool);
     bool awdlLinkMatches(bool requireChannel = true) const;
     void awdlFinishLinkedStop();
     IOReturn awdlProbe(OSObject *, bool scheduled = false);

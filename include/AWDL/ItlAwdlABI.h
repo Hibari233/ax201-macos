@@ -11,8 +11,9 @@ enum {
     ITL_AWDL_RING_COUNT = 16,
     ITL_AWDL_MAX_DWELL_MS = 30000,
     ITL_AWDL_MAX_EVENTS = 32,
+    ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -58,6 +59,21 @@ struct ItlAwdlLinkedStatusResponse {
     uint32_t version, linked_mode, firmware_generation, start_generation;
     uint32_t channel, filter_enabled, restore_error, link_matches;
 };
+// BeginData uses BeginRequest: exclusive monitor, one owned peer, <=30 s.
+// Receive-only; probe TX and timed radio experiments are disallowed.
+struct ItlAwdlDataResponse {
+    uint32_t version, length, channel;
+    int32_t rssi_dbm;
+    uint64_t timestamp_us;
+    uint32_t gp2_us;
+    uint16_t sequence, reserved;
+    uint8_t source[6], destination[6];
+    uint8_t ipv6[ITL_AWDL_DATA_MTU];
+};
+struct ItlAwdlDataStatusResponse {
+    uint32_t version, enabled, accepted, malformed;
+    uint32_t unsupported, dropped, queued, reserved;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -86,6 +102,9 @@ static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");
 static_assert(sizeof(ItlAwdlRegStatusResponse) == 24, "AWDL regulatory status ABI");
 static_assert(sizeof(ItlAwdlLinkedStatusResponse) == 32, "AWDL linked status ABI");
+static_assert(sizeof(ItlAwdlDataResponse) == 1544, "AWDL IPv6 RX ABI");
+static_assert(sizeof(ItlAwdlDataStatusResponse) == 32, "AWDL IPv6 status ABI");
+static_assert(ItlAwdlBeginData == 15 && ItlAwdlReadData == 16 && ItlAwdlDataStatus == 17, "append-only ABI");
 static_assert(sizeof(ItlAwdlTimedFrameResponse) == 2088, "AWDL timed RX ABI");
 static_assert(sizeof(ItlAwdlClockResponse) == 48, "AWDL live clock ABI");
 static_assert(sizeof(ItlAwdlRunRequest) == 16, "AWDL run request ABI");

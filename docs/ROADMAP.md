@@ -15,15 +15,19 @@ AirDrop or universal adapter support. Each step needs its own evidence.
 
 ## Immediate engineering work
 
-1. Establish an offline WPA3 capability/authentication test boundary around the
-   WCL join and net80211 RSN selection paths. Distinguish PSK, SAE and mandatory
-   PMF explicitly; do not claim support by changing advertised capability bits.
-2. Determine which SAE state is owned by the Apple stack and which must be
-   implemented in the driver. Reuse reviewed protocol implementations when their
-   interface and license fit; do not invent cryptographic primitives.
-3. Resume same-channel linked AWDL reception when a controlled WPA2 5 GHz network
-   and an owned peer can share a permitted channel. Until then, retain the
-   unvalidated status rather than assuming it works.
+AirDrop is the current priority. Stage numbers describe dependencies, not a
+requirement to complete WPA3 before AWDL.
+
+1. Validate the new AWDL IPv6 receive path on owned hardware. Revision 10 adds
+   an opt-in, receive-only, bounded monitor session and a tested data codec;
+   it does not create a native interface or implement peer negotiation.
+2. Establish bidirectional peer IPv6: validated peer state, advertisements,
+   synchronization, permitted firmware TX/ACK handling, then independent
+   radio contexts and STA coexistence. Passive reception alone is insufficient.
+3. Bind the verified Sequoia native backend and packet queues, then demonstrate
+   native discovery and actual bidirectional file transfers with matching hashes.
+4. Return to WPA3: trace Apple WCL SAE/PMF ownership, implement the missing
+   authentication/key lifecycle, and qualify it separately from AirDrop.
 
 WPA3 and AWDL are separate tracks. Completing one does not complete the other.
 The AX201 Bluetooth function and macOS discovery/identity services also need
