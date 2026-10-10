@@ -235,7 +235,7 @@ struct ItlAwdlNativeSyncTxResponse {
 struct ItlAwdlNativeRuntimeResponse {
     ItlAwdlNativeConfigureResponse activation;
     uint32_t attempted, ready, stopped, last_error;
-    uint32_t ticks, clock_valid, aw_events, aw_event_errors;
+    uint32_t timer_ticks, clock_valid, aw_events, aw_event_errors;
     uint32_t rx_handed_off, rx_rejected, rx_last_error, role_updates;
     uint32_t submitted, completed, succeeded, failed, pending, aborted;
     uint32_t timing_samples, timing_invalid, max_completion_delay_us, stop_reason;

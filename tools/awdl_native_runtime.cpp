@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     printf("{");
 #define FIELD(name) printf("\"" #name "\":%u,", out.name)
     FIELD(attempted); FIELD(ready); FIELD(stopped); FIELD(last_error);
-    FIELD(ticks); FIELD(clock_valid); FIELD(aw_events); FIELD(aw_event_errors);
+    FIELD(timer_ticks); FIELD(clock_valid); FIELD(aw_events); FIELD(aw_event_errors);
     FIELD(rx_handed_off); FIELD(rx_rejected); FIELD(rx_last_error); FIELD(role_updates);
     FIELD(submitted); FIELD(completed); FIELD(succeeded); FIELD(failed); FIELD(pending); FIELD(aborted);
     FIELD(timing_samples); FIELD(timing_invalid); FIELD(max_completion_delay_us); FIELD(stop_reason);

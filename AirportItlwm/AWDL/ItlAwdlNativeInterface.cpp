@@ -1321,7 +1321,7 @@ void ItlAwdlNativeInterface::runtimeTimeout(OSObject *owner, IOTimerEventSource 
 void ItlAwdlNativeInterface::runtimeTick() {
     auto r = runtimeRadio;
     if (!r || (runtimePhase != RuntimeStarting && runtimePhase != RuntimeRunning)) return;
-    ++runtimeResult.ticks;
+    ++runtimeResult.timer_ticks;
     auto fail = [&](IOReturn error) {
         if (!runtimeResult.last_error) runtimeResult.last_error = error;
         synchronizationRadioStopped();
