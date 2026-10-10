@@ -189,6 +189,13 @@ public:
         }
         return false;
     }
+    bool anchor(uint32_t gp2, uint64_t host_us, uint16_t aw_period_tu,
+                uint8_t presence, ScheduleSlot *slot) const {
+        // A matching EAW duration alone is insufficient: period and presence
+        // must each match so the AW counter has the same interpretation.
+        return valid_ && previous_.aw_period_tu == aw_period_tu &&
+            previous_.presence == presence && project(gp2, gp2, host_us, slot);
+    }
 private:
     bool valid_ = false;
     SyncAnnouncement previous_ = {};

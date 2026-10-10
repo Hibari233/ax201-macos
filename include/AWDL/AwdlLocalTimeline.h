@@ -53,4 +53,22 @@ private:
     uint16_t initialCounter_ = 0;
     uint8_t presence_ = 0;
 };
+
+// Align only the bounded qualification's software timeline to the selected
+// peer's RX-derived epoch. Both timestamps remain in the NIC GP2 domain.
+// No native manager state, election role or advertised channel plan changes.
+inline bool peerAlignedBoundary(const ScheduleTracker &schedule, uint32_t gp2,
+    uint64_t hostUs, uint16_t awPeriodTu, uint8_t presence, bool clockQualified,
+    LocalSyncBoundary *out) {
+    ScheduleSlot anchor = {};
+    if (!out || !clockQualified || !schedule.anchor(gp2, hostUs, awPeriodTu, presence, &anchor))
+        return false;
+    LocalTimeline aligned;
+    LocalSyncBoundary value = {};
+    if (!aligned.start(anchor.start_gp2_us, awPeriodTu, presence, anchor.counter) ||
+        !aligned.sample(gp2, &value) || value.nextBoundaryUs != anchor.end_gp2_us)
+        return false;
+    *out = value;
+    return true;
+}
 }

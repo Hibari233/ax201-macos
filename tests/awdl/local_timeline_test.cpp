@@ -53,6 +53,51 @@ int main() {
     assert(output.counter==0 && output.slot==0 && output.downCounterTu==64);
     assert(output.phyUs==0xf000 && output.targetUs==0xf000 && output.nextBoundaryUs==0x1f000);
 
+    // Independent expected peer epoch: RX clock, not host delivery time,
+    // determines the boundary. The free-running local phase misses channel 6.
+    SyncAnnouncement peer = {};
+    peer.aw_period_tu=16; peer.presence=4; peer.down_counter_tu=64;
+    peer.tx_delay_us=100; peer.master[0]=2; peer.plan.step_aw=4;
+    peer.plan.channels[0]=peer.plan.channels[8]=6;
+    ScheduleTracker schedule; ScheduleSample observed={};
+    assert(schedule.observe(peer,100000,1000000,&observed));
+    const auto preserved=output;
+    assert(!peerAlignedBoundary(schedule,100000,1000000,16,4,true,&output));
+    assert(!memcmp(&output,&preserved,sizeof(output)));
+    peer.down_counter_tu=48; peer.aw_counter=1;
+    assert(schedule.observe(peer,116384,1018000,&observed));
+    peer.down_counter_tu=32; peer.aw_counter=2;
+    assert(schedule.observe(peer,132768,1045000,&observed));
+    assert(timeline.start(0,16,4) && timeline.sample(132868,&output));
+    assert(output.slot==2 && peer.plan.channels[output.slot]==0);
+    assert(peerAlignedBoundary(schedule,132868,1045100,16,4,true,&output));
+    assert(output.slot==0 && output.counter==2 && peer.plan.channels[output.slot]==6);
+    assert(output.nextBoundaryUs==165436 && output.remainingUs==32568);
+    assert(output.phyUs==132868 && output.targetUs==132668 && output.downCounterTu==32);
+    const auto aligned=output;
+    assert(!peerAlignedBoundary(schedule,132868,1045100,32,2,true,&output));
+    assert(!peerAlignedBoundary(schedule,132868,1045100,8,8,true,&output));
+    assert(!peerAlignedBoundary(schedule,132868,1045100,16,4,false,&output));
+    assert(!peerAlignedBoundary(schedule,132868,2045001,16,4,true,&output));
+    assert(!peerAlignedBoundary(schedule,132768+1000001,1045100,16,4,true,&output));
+    assert(!peerAlignedBoundary(schedule,132868,1045100,16,4,true,nullptr));
+    assert(!memcmp(&output,&aligned,sizeof(output)));
+    peer.master[1]=1;
+    assert(schedule.observe(peer,142768,1055000,&observed) && observed.reset);
+    assert(!peerAlignedBoundary(schedule,142868,1055100,16,4,true,&output));
+
+    ScheduleTracker peerWrap;
+    peer.aw_counter=65532; peer.down_counter_tu=64;
+    assert(peerWrap.observe(peer,0xfffff000U,1000000,&observed));
+    peer.aw_counter=65533; peer.down_counter_tu=48;
+    assert(peerWrap.observe(peer,0x3000U,1016384,&observed));
+    peer.aw_counter=65534; peer.down_counter_tu=32;
+    assert(peerWrap.observe(peer,0x7000U,1032768,&observed));
+    assert(peerAlignedBoundary(peerWrap,0x7100U,1033024,16,4,true,&output));
+    assert(output.counter==65534 && output.nextBoundaryUs==0xef9cU);
+    assert(peerAlignedBoundary(peerWrap,0x10000U,1069632,16,4,true,&output));
+    assert(output.counter==0 && output.slot==0 && output.nextBoundaryUs==0x1ef9cU);
+
     NativeBssidConfiguration network;
     const uint8_t identifiers[]={0x00,0x25,0x00,0xff,0x94,0x73,0x00,0x25,0x00,0xff,0x94,0x74};
     assert(network.replace(1,identifiers,identifiers+6)==BssidResult::Stored);

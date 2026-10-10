@@ -239,8 +239,17 @@ sudo build/tools/awdl_native_init sync-tx-selftest
 sudo build/tools/awdl_native_init sync-tx OWNED_PEER_MAC 3000
 ```
 
-A local timeline starts from a coherent GP2 sample. It advances AW counters and
-channel-plan slots, including counter/clock wrap. Its TU-aligned target timestamp
+A local CPU specimen starts from a coherent GP2 sample. An RF-eligible timeline
+instead derives its epoch and counter from the selected peer's fresh schedule,
+after at least three coherent RX samples and RX/local clock correlation. The
+peer's AW period and presence must each match the staged native profile; an
+equal EAW duration with different counter units is rejected. Each sample uses
+the current qualified projection, so a peer/master discontinuity must rebuild
+confidence before becoming eligible again. No native manager clock, election
+role or channel plan is changed by this bounded diagnostic.
+
+The timeline advances AW counters and channel-plan slots, including
+counter/clock wrap. Its TU-aligned target timestamp
 and separate fractional-TU PHY offset reconstruct the exact EAW boundary; it
 does not round away the remaining fraction. The qualification takes its AW period from the owned native sync parameters,
 currently restricted to the audited 16-TU default, and uses the staged
@@ -266,7 +275,8 @@ advertises a channel-6 communication window.
 
 Both passive and TX qualifications publish `AX201NativePeerWindow` after
 cleanup: clock/schedule rejection counts, channel mismatch, edge/ready counts,
-local overlap and the last projected window's numeric fields. This exposes no
+local overlap, alignment success/unavailability, and the last projected
+window's numeric fields. This exposes no
 packet bytes or device identities. The counters describe predictions, not RF
 reception. Individual TX timing records include the final projected margins.
 

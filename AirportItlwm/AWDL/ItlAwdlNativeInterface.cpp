@@ -796,6 +796,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         uint64_t nextClockHostUs;
         bool timelineReady, sentWindow; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
+        uint32_t alignedSamples, alignmentUnavailable;
         ItlAwdl::PeerTxWindow lastPeerWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
@@ -902,12 +903,22 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 if (!c->timelineReady || !c->timeline.sample(clock.gp2_us,&boundary)) {
                     out->last_error = kIOReturnError; c->finished = true; return kIOReturnSuccess;
                 }
+                // An independently chosen epoch can miss every peer window
+                // even when both channel plans contain the same channel.
+                // Re-derive this diagnostic boundary only from a fresh,
+                // coherent peer schedule with the identical timing profile.
+                // The unaligned CPU specimen below is never eligible for TX.
+                const bool aligned = ItlAwdl::peerAlignedBoundary(s.schedule, clock.gp2_us,
+                    clock.host_end_us, o->syncParameters.periodTu(), uint8_t(o->presenceMode),
+                    (clock.flags & 7) == 7, &boundary);
+                if (aligned) ++c->alignedSamples;
+                else ++c->alignmentUnavailable;
                 uint8_t frame[ItlAwdl::SyncActionMaxLength];
                 auto length = o->encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame),
                     &boundary,uint16_t(s.tx.submitted));
                 if (!length) { out->last_error = kIOReturnError; c->finished = true; }
                 else { ++out->encoded; out->encoded_length = uint32_t(length); }
-                const bool overlap = peerResult == ItlAwdl::PeerWindowResult::Ready &&
+                const bool overlap = aligned && peerResult == ItlAwdl::PeerWindowResult::Ready &&
                     boundary.remainingUs > 12000 &&
                     o->channelSequence.plan().channels[boundary.slot] == s.channel;
                 if (overlap) ++c->overlapWindows;
@@ -968,7 +979,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         out->radio_stopped = s.session == ItlAwdlIdle && !r->awdlNativeRadioOwner && !s.owner &&
             ic->ic_opmode == IEEE80211_M_STA && !(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING));
         if (o && !o->resourcesDisposed) {
-            auto windows = OSDictionary::withCapacity(12);
+            auto windows = OSDictionary::withCapacity(14);
             if (windows) {
                 auto put = [&](const char *key, uint32_t value) {
                     auto number = OSNumber::withNumber(value, 32);
@@ -979,6 +990,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 static_assert(nitems(names) == unsigned(ItlAwdl::PeerWindowResult::Count), "window results");
                 for (unsigned i = 0; i < nitems(names); ++i) put(names[i], c->peerWindows[i]);
                 put("samples", out->samples); put("local_overlap", c->overlapWindows);
+                put("aligned_samples", c->alignedSamples);
+                put("alignment_unavailable", c->alignmentUnavailable);
                 put("selected_channel", out->channel);
                 put("last_peer_channel", c->lastPeerWindow.channel);
                 put("last_peer_counter", c->lastPeerWindow.counter);
