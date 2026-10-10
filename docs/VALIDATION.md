@@ -1226,3 +1226,39 @@ The receiving Mac's observer found no transmitter entry in 211 samples over
 restored Wi-Fi and preserved the same manager before recording the failed timing
 assertion. WPA2 passed 42/42 router pings and GPU/display/power checks passed.
 Native AirDrop is unavailable; firmware unicast success alone is not completion.
+
+## Addressed ACK timing observation — 2026-10-11
+
+Source `fc7735bc70a728116a6c66cd9df5fc6885703e3f` (revision 45), binary
+`c3ebda8bd44163cb161526b185184be7c068575b7816a70b172fafaa6ffec319`, loaded
+UUID `048AA462-FDDA-37B2-88A5-8D063BC65425`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38066207075)
+passed all three jobs. Twelve local C++ UBSan suites, five Python checks and
+both 560-slot/63-method ABI comparisons passed. Rollback is revision 44.
+
+The change only observes CRC-valid monitor ACKs addressed to the native sender
+during the bounded unicast lease; transmission and interrupt ownership are
+unchanged. ACKs have no transmitter address or sequence number, so their timing
+is correlated with the single outstanding transmission rather than treated as
+independent proof of peer identity. Unit checks cover frame bounds, receiver
+isolation, stale/future timestamps and GP2 wraparound.
+
+All 384 initialization contracts and configuration/timing/template checks
+passed. Two passive sessions heard 17 and 19 owned actions and each found four
+shared channel-6 windows. Ring drops were 1 and 3; invalid frames were zero.
+The unicast trial submitted and completed one frame with firmware status 1,
+zero retries/BT kills and 228 us media duration. One matching ACK had hardware
+GP2 **22,869 us after the encoded frame timestamp**; completion was at
+**24,090 us**, another 1,221 us later. The final clock read to the doorbell took
+6 us. For this sample, most of the delay preceded the observed ACK rather than
+being solely a host notification delay. It still fails the unchanged 5 ms
+qualification. Firmware scheduling versus medium contention remains unresolved.
+
+The receiving Mac's observer found no transmitter entry in 212 samples over
+45 seconds, with its own address present throughout. Its discoverability
+preference was read as Everyone without changing it. The detached harness
+restored WPA2 (42/42 pings), retained the same manager, and passed GPU/display/
+power checks before recording the failed timing assertion. Boot continuity was
+also checked using the boot-session UUID because wall-clock adjustment changes
+the reported boot time. No native interface, queues or RX handoff were enabled.
+Native AirDrop remains unavailable.
