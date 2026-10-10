@@ -6059,11 +6059,26 @@ iwx_rx_tx_cmd_single(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR &&
         tx_resp->tx_queue == sc->first_data_qid && awdl.tx.pending) {
+        // Linux v6.12 mvm/tx.c accepts SUCCESS and DIRECT_DONE. Restrict this
+        // additional completion case to our explicit native-template trial.
+        if (awdlNativeRadioOwner && awdlNativeTxQualification && status == IWX_TX_STATUS_DIRECT_DONE)
+            txfail = 0;
         ++awdl.tx.completed;
         --awdl.tx.pending;
         if (txfail) ++awdl.tx.failed;
         else ++awdl.tx.succeeded;
         awdl.tx.last_firmware_status = status;
+        if (awdlNativeRadioOwner && awdlNativeTxQualification) {
+            awdlNativeLastRate = le32toh(tx_resp->initial_rate);
+            ItlAwdlClockResponse clock = {};
+            auto error = awdlReadClock(&clock);
+            const auto delay = ItlAwdl::clockDelta(clock.gp2_us,awdlNativeTxGp2);
+            if (error || !(clock.flags&1) || delay<0 || delay>30000000) ++awdlNativeTimingInvalid;
+            else {
+                ++awdlNativeTimingSamples;
+                if (uint32_t(delay)>awdlNativeMaxCompletionUs) awdlNativeMaxCompletionUs=uint32_t(delay);
+            }
+        }
     }
 #endif
     
@@ -6917,11 +6932,12 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     int type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     int min_ridx = iwx_rval2ridx(ieee80211_min_basic_rate(ic));
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    // AWDL diagnostic frames use 6 Mbit/s OFDM, including channel 6.
+    // Radio diagnostics use 6 Mbit/s OFDM, including channel 6. The separate
+    // native-template TX qualification uses its validated staged minimum rate.
     // The monitor station has no infrastructure link-quality table. Unicast
     // data must also use CMD_RATE rather than firmware-selected STA rates.
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR)
-        min_ridx = iwx_rval2ridx(12);
+        min_ridx = iwx_rval2ridx(awdlNativeTxQualification ? awdlNativeRateMbps * 2 : 12);
 #endif
     int ridx, rate_flags;
     uint8_t cmdver;
@@ -8714,6 +8730,10 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
     
     IEEE80211_ADDR_COPY(cmd->node_addr, ic->ic_myaddr);
     if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && awdlNativeTxQualification)
+            IEEE80211_ADDR_COPY(cmd->node_addr,awdlNativeAddress);
+#endif
         IEEE80211_ADDR_COPY(cmd->bssid_addr, etherbroadcastaddr);
         return;
     }

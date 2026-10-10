@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -209,6 +209,16 @@ struct ItlAwdlNativeRadioResponse {
     uint32_t backend_before, backend_after, creation_before, creation_after;
     uint64_t registry_id, rx_total, rx_awdl, rx_peer, rx_dropped, rx_invalid;
 };
+// Explicit bounded synchronization TX qualification, separate from selector 28.
+// Same BeginRequest; at most four driver-built PSFs, no arbitrary user payload.
+// Completion timing is a conservative bound, NOT an on-air TX timestamp.
+struct ItlAwdlNativeSyncTxResponse {
+    ItlAwdlNativeRadioResponse radio;
+    uint32_t submitted, completed, succeeded, failed, pending, aborted;
+    uint32_t timing_samples, timing_invalid, max_completion_delay_us;
+    uint32_t first_counter, last_counter, windows_used, min_rate_mbps;
+    uint32_t last_rate_flags, limit, last_firmware_status;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -255,6 +265,8 @@ static_assert(ItlAwdlNativeTemplate == 27, "append-only native template ABI");
 static_assert(sizeof(ItlAwdlNativeTemplateResponse) == 360, "native template response ABI");
 static_assert(ItlAwdlNativeRadio == 28, "append-only native radio ABI");
 static_assert(sizeof(ItlAwdlNativeRadioResponse) == 160, "native radio response ABI");
+static_assert(ItlAwdlNativeSyncTx == 29, "append-only native sync TX ABI");
+static_assert(sizeof(ItlAwdlNativeSyncTxResponse) == 224, "native sync TX response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
 static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
 static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");

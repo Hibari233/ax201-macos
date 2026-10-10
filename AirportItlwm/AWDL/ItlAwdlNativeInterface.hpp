@@ -7,6 +7,7 @@
 #include <AWDL/AwdlActionTemplate.h>
 #include <AWDL/AwdlSyncAction.h>
 #include <AWDL/AwdlNativeChannelSequence.h>
+#include <AWDL/AwdlLocalTimeline.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -42,7 +43,7 @@ public:
     static IOReturn probeTemplate(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTemplateResponse *);
     static IOReturn probeRadio(AirportItlwm *, ItlIwx *,
-        const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *);
+        const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -125,7 +126,8 @@ private:
     uint32_t bsdPublishCalls, bsdPrepareCalls, bsdPrepareError;
     uint32_t bsdEnableCalls, bsdEnableDenied;
     void describeBSD(ItlAwdlNativeBSDResponse *);
-    size_t encodeQualificationFrame(uint32_t, uint8_t *, size_t);
+    size_t encodeQualificationFrame(uint32_t, uint8_t *, size_t,
+        const ItlAwdl::LocalSyncBoundary * = nullptr, uint16_t sequence = 0);
     IOReturn prepareTransport(IOWorkLoop *, uint32_t);
     IOReturn clearTransport(bool systemStop = false);
     void describeTransport(ItlAwdlNativeTransportResponse *);

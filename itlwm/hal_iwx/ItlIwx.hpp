@@ -169,6 +169,10 @@ private:
     // Internal receive-only qualification lease. The native probe retains this
     // object through cleanup; userspace cannot set or supply this identity.
     OSObject *awdlNativeRadioOwner = nullptr;
+    bool awdlNativeTxQualification = false;
+    uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
+    uint32_t awdlNativeTxGp2 = 0, awdlNativeTimingSamples = 0, awdlNativeTimingInvalid = 0;
+    uint32_t awdlNativeMaxCompletionUs = 0, awdlNativeLastRate = 0;
     struct {
         bool ready = false;
         bool rejected = false;
@@ -222,7 +226,8 @@ private:
     void awdlFinishLinkedStop();
     IOReturn awdlProbe(OSObject *, bool scheduled = false);
     IOReturn awdlDataProbe(OSObject *, const ItlAwdlDataProbeRequest *);
-    IOReturn awdlTransmitGuard(OSObject *, bool data, bool scheduled);
+    IOReturn awdlTransmitGuard(OSObject *, bool data, bool scheduled, bool native = false);
+    IOReturn awdlSubmitNativeSync(OSObject *, const uint8_t *, size_t, uint32_t);
     IOReturn awdlSubmitDiagnostic(const uint8_t *, size_t);
     IOReturn awdlReadClock(ItlAwdlClockResponse *);
     IOReturn awdlRun(OSObject *, const ItlAwdlRunRequest *);

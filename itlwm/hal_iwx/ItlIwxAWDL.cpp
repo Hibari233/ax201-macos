@@ -6,6 +6,7 @@
 #include <AWDL/AwdlEcho.h>
 #include <AWDL/AwdlRegulatory.h>
 #include <AWDL/AwdlRxClock.h>
+#include <AWDL/AwdlSyncAction.h>
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -39,7 +40,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 262143; // Adds retained native RX/clock qualification. No native AirDrop.
+            out->capabilities = 524287; // Adds bounded native-template PSF TX qualification. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -348,8 +349,11 @@ void ItlIwx::awdlFinishLinkedStop() {
     awdl.session = ItlAwdlIdle;
 }
 
-IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled) {
-    if (awdlNativeRadioOwner) return kIOReturnUnsupported;
+IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled, bool native) {
+    if (native) {
+        if (!awdlNativeTxQualification || !awdlNativeRadioOwner || owner != awdlNativeRadioOwner ||
+            data || scheduled) return kIOReturnNotPermitted;
+    } else if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
     if (awdl.linked || bool(awdl.dataStatus.enabled) != data) return kIOReturnUnsupported;
@@ -360,7 +364,7 @@ IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled) {
         !(ic->ic_ac.ac_if.if_flags & IFF_RUNNING)) return kIOReturnNotReady;
     auto channel = &ic->ic_channels[awdl.channel];
     uint64_t now = awdlNowUs();
-    if (!scheduled && (channel->ic_flags & IEEE80211_CHAN_PASSIVE) && awdl.mccQueries < 2 &&
+    if (!native && !scheduled && (channel->ic_flags & IEEE80211_CHAN_PASSIVE) && awdl.mccQueries < 2 &&
         (!awdl.lastMccQueryUs || now - awdl.lastMccQueryUs >= 1000000) &&
         (isset(com.sc_ucode_api, IWX_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
          isset(com.sc_enabled_capa, IWX_UCODE_TLV_CAPA_LAR_MULTI_MCC))) {
@@ -386,7 +390,7 @@ IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled) {
     // only while the selected peer was heard on this channel within 500 ms.
     if (!awdl.lastPeerRxUs || now - awdl.lastPeerRxUs > 500000)
         return kIOReturnNotReady;
-    if (awdl.tx.submitted >= 8) return kIOReturnNoSpace;
+    if (awdl.tx.submitted >= (native ? 4U : 8U)) return kIOReturnNoSpace;
     if (awdl.tx.pending || (awdl.lastProbeUs && now - awdl.lastProbeUs < 100000))
         return kIOReturnBusy;
     return kIOReturnSuccess;
@@ -442,6 +446,29 @@ IOReturn ItlIwx::awdlSubmitDiagnostic(const uint8_t *bytes, size_t length) {
     ++awdl.tx.pending;
     awdl.lastProbeUs = awdlNowUs();
     return kIOReturnSuccess;
+}
+
+IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, size_t length, uint32_t gp2) {
+    auto result = awdlTransmitGuard(owner, false, false, true);
+    if (result) return result;
+    ItlAwdl::ActionInfo action = {};
+    ItlAwdl::SyncAnnouncement sync = {};
+    if (!bytes || length > ItlAwdl::SyncActionMaxLength ||
+        ItlAwdl::parseAction(bytes,length,&action) != ItlAwdl::ParseResult::Valid ||
+        ItlAwdl::parseSchedule(bytes,length,&sync) != ItlAwdl::ScheduleResult::Valid ||
+        bytes[30] != 0 || !ItlAwdl::equalMac(bytes+10,awdlNativeAddress) ||
+        !ItlAwdl::equalMac(bytes+16,ItlAwdl::DefaultAwdlBssid) || action.phy_tx != gp2)
+        return kIOReturnBadArgument;
+    for (unsigned i=0;i<6;++i) if (bytes[4+i]!=0xff) return kIOReturnBadArgument;
+    ItlAwdlClockResponse clock = {};
+    result = awdlReadClock(&clock);
+    const auto age = ItlAwdl::clockDelta(clock.gp2_us,gp2);
+    if (result || !(clock.flags&1) || age<0 || age>2000) return kIOReturnNotReady;
+    // There are no sleeping firmware queries between this freshness check and
+    // submission. Completion samples a conservative delay bound, never an
+    // invented on-air timestamp. The monitor uses the native source MAC/rate.
+    awdlNativeTxGp2 = gp2;
+    return awdlSubmitDiagnostic(bytes,length);
 }
 
 IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
@@ -772,6 +799,7 @@ void ItlIwx::awdlDetach() {
         self->awdl.ready = false;
         self->awdl.owner = nullptr;
         self->awdlNativeRadioOwner = nullptr;
+        self->awdlNativeTxQualification = false;
         if (self->awdl.timer) {
             self->awdl.timer->cancelTimeout();
             self->getMainWorkLoop()->removeEventSource(self->awdl.timer);

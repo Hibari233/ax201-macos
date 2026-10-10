@@ -591,14 +591,17 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
 }
 
-size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *frame, size_t capacity) {
-    // An encoding specimen with a measured clock, not an observed AW boundary.
-    // Do not enqueue this constructed timing as a transmitted synchronization.
+size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *frame, size_t capacity,
+    const ItlAwdl::LocalSyncBoundary *boundary, uint16_t sequence) {
+    // Without a boundary this is a CPU-only encoding specimen. A supplied
+    // local-master timeline is used only by explicit bounded qualification;
+    // it does not represent an enabled native peer-manager synchronization.
     ItlAwdl::SyncActionContext context = {};
     memcpy(context.source, selfAddress.ether_addr_octet, 6);
     memset(context.destination, 0xff, 6);
     context.clockValid = true;
     context.phyTimeUs = context.targetTimeUs = gp2;
+    context.sequence = sequence;
     ItlAwdl::SyncActionParameters parameters = {};
     parameters.masterChannel = parameters.nextChannel = uint8_t(masterChannel);
     parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
@@ -610,6 +613,13 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
     parameters.maxUnicastExtension = extensionCounts[2];
     parameters.maxActionExtension = extensionCounts[3];
     parameters.plan = channelSequence.plan();
+    if (boundary) {
+        context.phyTimeUs = boundary->phyUs;
+        context.targetTimeUs = boundary->targetUs;
+        parameters.counter = boundary->counter;
+        parameters.downCounterTu = boundary->downCounterTu;
+        parameters.nextChannel = parameters.plan.channels[(boundary->slot + 1) % ItlAwdl::ScheduleLength];
+    }
     memcpy(parameters.master, stagedSyncRole.master, 6);
     const auto length = copySyncAction(context, parameters, frame, capacity);
     ItlAwdl::ActionInfo action = {};
@@ -622,17 +632,19 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
 }
 
 IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
-    const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out) {
+    const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out, ItlAwdlNativeSyncTxResponse *tx) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
         request->channel || request->reserved || request->padding[0] || request->padding[1] ||
-        request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer))
+        request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer) ||
+        (tx && out != &tx->radio))
         return kIOReturnBadArgument;
     if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
     auto gate = radio->getMainCommandGate();
     if (!gate || !gate->getWorkLoop() || gate->getWorkLoop()->inGate()) return kIOReturnNotReady;
     NativeProbeLease lease;
     if (!lease.owned) return kIOReturnBusy;
-    bzero(out, sizeof(*out));
+    if (tx) bzero(tx, sizeof(*tx));
+    else bzero(out, sizeof(*out));
     out->version = ITL_AWDL_ABI_VERSION;
     // Retain every object used across sleeps. Native teardown can still cancel
     // the radio on controller stop; each subsequent gated step revalidates it.
@@ -640,7 +652,11 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     struct Call { AirportItlwm *parent; ItlIwx *radio; ItlAwdlNativeInterface *object;
         const ItlAwdlBeginRequest *request; ItlAwdlNativeRadioResponse *out;
         uint32_t phase; int generation; bool finished;
-    } call = {parent, radio, nullptr, request, out, 0, -1, false};
+        ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
+        bool timelineReady, sentWindow; uint16_t lastWindow;
+    } call = {};
+    call.parent = parent; call.radio = radio; call.request = request;
+    call.out = out; call.generation = -1; call.tx = tx;
     auto action = [](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
         auto c = static_cast<Call *>(argument);
         auto r = c->radio;
@@ -663,6 +679,10 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 !o->templateResult.encoded_length || !o->masterChannelValid ||
                 (o->masterChannel != 6 && o->masterChannel != 44 && o->masterChannel != 149))
                 return kIOReturnNotReady;
+            if (c->tx && (!o->minimumRateValid || !o->stagedSyncRoleValid ||
+                o->stagedSyncRole.state != 1 || o->stagedSyncRole.operation_mode != 1 ||
+                !ItlAwdl::equalMac(o->stagedSyncRole.master,o->selfAddress.ether_addr_octet)))
+                return kIOReturnNotReady;
             // Do not turn off STA or change its association from this ioctl.
             if (ic->ic_opmode != IEEE80211_M_STA || ic->ic_state != IEEE80211_S_INIT ||
                 (ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING))) return kIOReturnBusy;
@@ -680,6 +700,15 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             // A typed, retained in-kernel owner is the sole exception to the
             // native/diagnostic exclusion. It cannot submit diagnostic TX.
             r->awdlNativeRadioOwner = o;
+            r->awdlNativeTxQualification = c->tx != nullptr;
+            r->awdlNativeRateMbps = c->tx ? o->minimumRateMbps : 0;
+            bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
+            r->awdlNativeTimingSamples = r->awdlNativeTimingInvalid = r->awdlNativeMaxCompletionUs = 0;
+            r->awdlNativeLastRate = r->awdlNativeTxGp2 = 0;
+            if (c->tx) {
+                memcpy(r->awdlNativeAddress,o->selfAddress.ether_addr_octet,6);
+                c->tx->min_rate_mbps = o->minimumRateMbps; c->tx->limit = 4;
+            }
             out->attempted = 1;
             auto result = r->awdlBegin(o, &begin);
             if (result) { out->last_error = result; c->finished = true; }
@@ -708,10 +737,40 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             if (clock.flags & 4) ++out->rx_clock_valid;
             if ((clock.flags & 3) == 3) {
                 ++out->clock_valid;
+                if (!c->timelineReady)
+                    c->timelineReady = c->timeline.start(clock.gp2_us,16,uint8_t(o->presenceMode));
+                ItlAwdl::LocalSyncBoundary boundary = {};
+                if (!c->timelineReady || !c->timeline.sample(clock.gp2_us,&boundary)) {
+                    out->last_error = kIOReturnError; c->finished = true; return kIOReturnSuccess;
+                }
                 uint8_t frame[ItlAwdl::SyncActionMaxLength];
-                auto length = o->encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame));
+                auto length = o->encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame),
+                    &boundary,uint16_t(s.tx.submitted));
                 if (!length) { out->last_error = kIOReturnError; c->finished = true; }
                 else { ++out->encoded; out->encoded_length = uint32_t(length); }
+                if (c->tx && length) {
+                    // Bound a qualification to four PSFs and one pending TX.
+                    // Transmit only inside a selected-channel EAW, with time
+                    // left for firmware submission. The diagnostic does not
+                    // claim actual native synchronization has been enabled.
+                    const uint16_t window = boundary.counter / uint8_t(o->presenceMode);
+                    if (s.tx.failed) {
+                        out->last_error = kIOReturnIOError; c->finished = true;
+                    } else if (r->awdlNativeTimingInvalid || r->awdlNativeMaxCompletionUs > 5000) {
+                        out->last_error = kIOReturnTimeout; c->finished = true;
+                    } else if (s.tx.submitted < 4 && !s.tx.pending &&
+                        (!c->sentWindow || window != c->lastWindow) && boundary.remainingUs > 12000 &&
+                        o->channelSequence.plan().channels[boundary.slot] == s.channel) {
+                        auto sent = r->awdlSubmitNativeSync(o,frame,length,clock.gp2_us);
+                        if (!sent) {
+                            if (!c->tx->windows_used) c->tx->first_counter = boundary.counter;
+                            c->tx->last_counter = boundary.counter; ++c->tx->windows_used;
+                            c->sentWindow = true; c->lastWindow = window;
+                        } else if (sent != kIOReturnBusy && sent != kIOReturnNotReady) {
+                            out->last_error = sent; c->finished = true;
+                        }
+                    }
+                }
             }
             return kIOReturnSuccess;
         }
@@ -725,6 +784,19 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 if (result && !out->last_error) out->last_error = result;
             }
             r->awdlNativeRadioOwner = nullptr;
+            r->awdlNativeTxQualification = false;
+            bzero(r->awdlNativeAddress,sizeof(r->awdlNativeAddress));
+            r->awdlNativeRateMbps = 0;
+        }
+        if (c->tx) {
+            c->tx->submitted = s.tx.submitted; c->tx->completed = s.tx.completed;
+            c->tx->succeeded = s.tx.succeeded; c->tx->failed = s.tx.failed;
+            c->tx->pending = s.tx.pending; c->tx->aborted = s.tx.aborted;
+            c->tx->timing_samples = r->awdlNativeTimingSamples;
+            c->tx->timing_invalid = r->awdlNativeTimingInvalid;
+            c->tx->max_completion_delay_us = r->awdlNativeMaxCompletionUs;
+            c->tx->last_rate_flags = r->awdlNativeLastRate;
+            c->tx->last_firmware_status = s.tx.last_firmware_status;
         }
         out->stop_reason = s.stopReason;
         out->state_after = ic->ic_state; out->mode_after = ic->ic_opmode;
@@ -2045,6 +2117,7 @@ void ItlAwdlNativeInterface::releaseManagedGated(AirportItlwm *parent) {
     if (radio && radio->awdlNativeRadioOwner == object) {
         radio->awdlCommand(object, ItlAwdlEnd, nullptr, nullptr);
         radio->awdlNativeRadioOwner = nullptr;
+        radio->awdlNativeTxQualification = false;
     }
     parent->nativeAwdlInterface = nullptr;
     object->stop(parent);

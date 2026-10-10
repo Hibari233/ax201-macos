@@ -179,7 +179,7 @@ creation opportunity. Failed injected factories and init-only tests do not.
 
 The shared radio gate excludes userspace monitor diagnostics while this object
 exists; normal STA Wi-Fi remains the intended active radio path. The separate
-bounded radio qualification below owns an internal receive-only lease. Neither
+bounded radio qualifications below own internal leases. Neither
 path implements concurrent STA/AWDL scheduling. No BSD interface, packet queues, service
 registration, radio activation or native AirDrop capability is enabled. Runtime
 qualification must verify stable identity across clients, disposal, denial of
@@ -225,6 +225,54 @@ address is returned. No frame is transmitted, native RX is not invoked, and the
 peer manager/interface/queues remain disabled. This qualifies radio ownership
 and timing groundwork, not RF synchronization or an operational AirDrop link.
 Hardware results are recorded separately in `VALIDATION.md`.
+
+### Bounded native-template PSF transmission
+
+Selector 29 / capability bit 262144 is an explicit TX qualification, separate
+from the receive-only selector 28. It uses the same input and readiness checks,
+plus an elected-self master role and a staged supported OFDM minimum rate.
+
+```
+sudo build/tools/awdl_native_init sync-tx-selftest
+# STA must already be powered off; the test peer must be the user's device.
+sudo build/tools/awdl_native_init sync-tx OWNED_PEER_MAC 3000
+```
+
+A local timeline starts from a coherent GP2 sample. It advances AW counters and
+channel-plan slots, including counter/clock wrap. Its TU-aligned target timestamp
+and separate fractional-TU PHY offset reconstruct the exact EAW boundary; it
+does not round away the remaining fraction. The qualification uses 16-TU AWs
+and the staged presence/plan. These are explicit test-timeline parameters, not
+proof that the unimplemented native synchronization-parameter backend works.
+
+At most four broadcast PSFs are built from the owned native template. Only one
+can be pending, at most one is submitted per selected-channel EAW, and at least
+12 ms must remain in that window. Transmission also requires a recent frame
+from the specified owned peer, an active non-passive/non-DFS firmware channel,
+and a hardware-clock snapshot no older than 2 ms. The internal submission helper
+revalidates the frame, source address, standard BSSID and clock. It accepts no
+userspace payload. The temporary monitor MAC uses the native interface's address
+and staged minimum OFDM rate; the ordinary STA address is not modified.
+
+Completion samples GP2 again to bound total elapsed time conservatively. This
+includes firmware queueing and completion delivery; it is **not** a measured
+on-air timestamp. The trial stops further submissions after a firmware failure,
+invalid timestamp, or an observed completion bound over 5 ms. The response
+reports submission/completion counts, raw final rate/status and timing bounds,
+without claiming RF observation by the peer. Stop/timeout restores the radio
+and clears the private TX lease.
+
+Intel's [TX API](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/fw/api/tx.h)
+describes media duration rather than an absolute on-air timestamp in the used
+response. The gen3 command's eight trailing bytes are reserved in that source;
+this implementation leaves them zero. Its [completion handler](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/mvm/tx.c)
+accepts success and direct-done statuses; the trial handles both without changing
+ordinary STA completion behavior.
+
+The retained native peer manager, BSD interface and packet queues remain
+disabled. This trial does not perform native RX handoff, native AW events,
+master election, service discovery, IPv6 transport or AirDrop. Build/CI results
+and hardware qualification must be recorded separately.
 
 ## Native configuration trace
 
