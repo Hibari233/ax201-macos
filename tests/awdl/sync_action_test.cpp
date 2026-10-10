@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <AWDL/AwdlSyncAction.h>
 #include <AWDL/AwdlNativeFrame.h>
+#include <AWDL/AwdlRadioObservation.h>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +64,24 @@ int main() {
     assert(parseSchedule(out, n, &sync) == ScheduleResult::Valid);
     assert(sync.aw_period_tu == 16 && sync.down_counter_tu == 32 && sync.aw_counter == 0x1234);
     assert(sync.tx_delay_us == 32 && equalMac(sync.master, c.source) && equalChannelPlan(sync.plan, s.plan));
+    SyncWireProfile profile = {};
+    assert(syncWireProfile(out,n,&profile));
+    assert(profile.version==0x10 && profile.subtype==0 && profile.flags==0x1800);
+    assert(profile.periodTu==16 && profile.commonTu==16 && profile.extensionTu==16);
+    assert(profile.actionPeriodTu==110 && profile.downCounterTu==32 && profile.remainingTu==0);
+    assert(profile.counter==0x1234 && profile.alignment==0xabcd && profile.presence==4);
+    assert(profile.masterChannel==6 && profile.nextChannel==6 && !profile.separatePlan);
+    assert(equalChannelPlan(profile.plan,s.plan));
+    for (auto value:profile.extensions) assert(value==3);
+    const auto savedProfile=profile;
+    assert(!syncWireProfile(nullptr,n,&profile) && !syncWireProfile(out,n,nullptr));
+    for (size_t size=0;size<n;++size) {
+        // The valid sync TLV alone (without the optional version TLV) is
+        // also a valid specimen; all other truncations must fail atomically.
+        const bool valid=syncWireProfile(out,size,&profile);
+        assert(valid == (size==100));
+        assert(!memcmp(&profile,&savedProfile,sizeof(profile)));
+    }
     NativeActionMetadata metadata = {}; NativeActionView view = {};
     NativeActionRxContext rx = {6, -50, 100000, true};
     assert(encodeNativeActionMetadata(c.source, rx, &metadata));

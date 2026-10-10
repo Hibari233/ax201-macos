@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <AWDL/AwdlTxCompletion.h>
 #include <AWDL/AwdlAck.h>
+#include <AWDL/AwdlRadioObservation.h>
 #include <assert.h>
 #include <initializer_list>
 #include <stdio.h>
@@ -8,6 +9,29 @@
 using namespace ItlAwdl;
 
 int main() {
+    uint8_t observed[24] = {0xd0,0,0x80,0x01}; // 384 us Duration, management
+    PendingRxObservation rx;
+    for (size_t n=0;n<24;++n) rx.observe(observed,n,100,300);
+    assert(!rx.frames);
+    rx.observe(observed,24,100,300);
+    assert(rx.frames==1 && rx.management==1 && rx.bytes==24 && rx.maxNavUs==384);
+    assert(rx.firstOffsetUs==200 && rx.lastOffsetUs==200);
+    observed[0]=0xa4; observed[3]=0xc0; // PS-Poll AID must not inflate NAV.
+    rx.observe(observed,16,100,400);
+    assert(rx.frames==2 && rx.control==1 && rx.maxNavUs==384);
+    observed[0]=8;
+    rx.observe(observed,24,0xfffffff0U,0x20);
+    assert(rx.data==1 && rx.frames==3 && rx.firstOffsetUs==48 && rx.lastOffsetUs==300);
+    const auto savedRx=rx;
+    rx.observe(nullptr,24,100,300); rx.observe(observed,4097,100,300);
+    rx.observe(observed,24,100,99); rx.observe(observed,24,100,100);
+    rx.observe(observed,24,100,100101);
+    observed[0]=12; rx.observe(observed,24,100,300);
+    observed[0]=1; rx.observe(observed,24,100,300);
+    assert(!memcmp(&rx,&savedRx,sizeof(rx)));
+    observed[0]=8;
+    for (unsigned i=0;i<5000;++i) rx.observe(observed,24,100,500);
+    assert(rx.frames==4096 && rx.management+rx.control+rx.data==rx.frames);
     const uint8_t sender[6] = {2,1,2,3,4,5};
     uint8_t ack[14] = {0xd4,0,0,0,2,1,2,3,4,5,0,0,0,0};
     uint32_t delay = 0xfeed;

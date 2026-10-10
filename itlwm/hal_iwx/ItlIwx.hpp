@@ -144,6 +144,7 @@
 #ifdef ITLWM_AWDL_EXPERIMENTAL
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlClock.h>
+#include <AWDL/AwdlRadioObservation.h>
 #include <IOKit/IOTimerEventSource.h>
 #endif
 
@@ -190,6 +191,8 @@ private:
         uint32_t commandOffloadAssist, commandHeaderLength;
         uint32_t ackCount, firstAckGp2, lastAckGp2;
         uint64_t firstAckHostUs;
+        ItlAwdl::PendingRxObservation beforeAckRx;
+        uint32_t macReadSamples, macClockReadySamples, macSleepingSamples, macInvalidSamples;
         uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
         uint16_t peerWindowCounter;
         uint8_t peerWindowChannel;
@@ -199,6 +202,9 @@ private:
     void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
     uint64_t awdlObserveNativeTxDma();
     void awdlPublishNativeTxTiming(IORegistryEntry *);
+    void awdlPublishNativePeerProfile(IORegistryEntry *);
+    ItlAwdl::SyncWireProfile awdlNativePeerProfile = {};
+    uint32_t awdlNativePeerProfileSamples = 0;
     struct {
         bool ready = false;
         bool rejected = false;

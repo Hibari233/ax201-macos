@@ -205,6 +205,8 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     awdl.rejected = false;
     awdl.head = awdl.count = 0;
     awdl.rxTotal = awdl.rxAwdl = awdl.rxPeer = awdl.rxDropped = awdl.rxInvalid = 0;
+    awdlNativePeerProfile = {};
+    awdlNativePeerProfileSamples = 0;
     bzero(&awdl.tx, sizeof(awdl.tx));
     awdl.lastPeerRxUs = awdl.lastProbeUs = 0;
     awdl.lastPeerGp2 = 0;
@@ -527,11 +529,22 @@ uint64_t ItlIwx::awdlObserveNativeTxDma() {
         !getMainWorkLoop()->inGate() || !com.rxq.stat) return now;
     auto &trace=awdlNativeTrace[awdlNativeTraceIndex];
     if (!trace.doorbellHostUs || trace.dmaReplyHostUs) return now;
+    // CSR reads do not require grabbing NIC access and this status register
+    // has no interrupt-acknowledgement side effect. Merely sample readiness;
+    // do not force the device awake or change its power policy.
+    const auto mac = IWX_READ(&com, IWX_CSR_GP_CNTRL);
+    ++trace.macReadSamples;
+    if (mac == 0xffffffffU || (mac & 0xfffffff0U) == 0xa5a5a5a0U)
+        ++trace.macInvalidSamples;
+    else {
+        if (mac & IWX_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY) ++trace.macClockReadySamples;
+        if (mac & IWX_CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP) ++trace.macSleepingSamples;
+    }
     trace.dmaProbeSupported=true;
     ++trace.dmaProbeSamples;
     // The published close index transfers these buffers to the host. Normal
     // RX cannot reclaim them concurrently because both paths use this gate.
-    // Only inspect completed DMA memory: no NIC access, MMIO, ring advancement,
+    // Only inspect completed DMA memory: no NIC access, ring advancement,
     // command completion, copying into live mbufs or interrupt acknowledgement.
     OSSynchronizeIO();
     const uint16_t hw=le16toh(*static_cast<volatile uint16_t *>(com.rxq.stat))&
@@ -568,6 +581,20 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         };
         put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
         put("unicast",t.unicast);
+        put("mac_status_samples",t.macReadSamples);
+        put("mac_clock_ready_samples",t.macClockReadySamples);
+        put("mac_going_to_sleep_samples",t.macSleepingSamples);
+        put("mac_invalid_samples",t.macInvalidSamples);
+        put("rx_before_ack_delivery_frames",t.beforeAckRx.frames);
+        put("rx_before_ack_delivery_bytes",t.beforeAckRx.bytes);
+        put("rx_before_ack_delivery_management",t.beforeAckRx.management);
+        put("rx_before_ack_delivery_control",t.beforeAckRx.control);
+        put("rx_before_ack_delivery_data",t.beforeAckRx.data);
+        put("rx_before_ack_delivery_max_nav_us",t.beforeAckRx.maxNavUs);
+        if (t.beforeAckRx.frames) {
+            put("rx_before_ack_delivery_first_from_frame_gp2_us",t.beforeAckRx.firstOffsetUs);
+            put("rx_before_ack_delivery_last_from_frame_gp2_us",t.beforeAckRx.lastOffsetUs);
+        }
         put("ack_samples",t.ackCount);
         if (t.ackCount) {
             put("first_ack_from_frame_gp2_us",uint32_t(ItlAwdl::clockDelta(t.firstAckGp2,t.frameGp2)));
@@ -625,6 +652,40 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
     // Published after the radio is stopped, outside the measured interval.
     owner->setProperty("AX201NativeTxTiming",records);
     records->release();
+}
+
+void ItlIwx::awdlPublishNativePeerProfile(IORegistryEntry *owner) {
+    if (!owner || !awdlNativePeerProfileSamples) return;
+    const auto &p = awdlNativePeerProfile;
+    auto entry = OSDictionary::withCapacity(25);
+    if (!entry) return;
+    auto put = [&](const char *key, uint32_t value) {
+        auto number = OSNumber::withNumber(value,32);
+        if (number) { entry->setObject(key,number); number->release(); }
+    };
+    put("samples",awdlNativePeerProfileSamples);
+    put("last_version",p.version); put("last_subtype",p.subtype);
+    put("next_channel",p.nextChannel); put("master_channel",p.masterChannel);
+    put("guard",p.guard); put("presence",p.presence); put("flags",p.flags);
+    put("period_tu",p.periodTu); put("action_period_tu",p.actionPeriodTu);
+    put("extension_tu",p.extensionTu); put("common_tu",p.commonTu);
+    put("remaining_tu",p.remainingTu); put("down_counter_tu",p.downCounterTu);
+    put("counter",p.counter); put("ap_alignment",p.alignment);
+    put("min_extension",p.extensions[0]); put("multicast_extension",p.extensions[1]);
+    put("unicast_extension",p.extensions[2]); put("action_extension",p.extensions[3]);
+    put("separate_channel_plan",p.separatePlan);
+    put("plan_encoding",p.plan.encoding); put("plan_step_aw",p.plan.step_aw);
+    auto plan = OSArray::withCapacity(ItlAwdl::ScheduleLength);
+    if (plan) {
+        for (unsigned i = 0; i < ItlAwdl::ScheduleLength; ++i) {
+            // Low byte is primary channel, high byte is operating class.
+            auto value = OSNumber::withNumber(uint32_t(p.plan.channels[i]) |
+                uint32_t(p.plan.operating_classes[i]) << 8,32);
+            if (value) { plan->setObject(value); value->release(); }
+        }
+        entry->setObject("channel_opclass",plan); plan->release();
+    }
+    owner->setProperty("AX201NativePeerProfile",entry); entry->release();
 }
 
 IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
@@ -1003,6 +1064,13 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
             ++trace.ackCount;
         }
     }
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated &&
+        channel == awdl.channel && awdlNativeTraceIndex < awdlNativeTraceCount &&
+        awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+        auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+        if (trace.doorbellHostUs && !trace.ackCount)
+            trace.beforeAckRx.observe(bytes,length,trace.frameGp2,gp2);
+    }
     if (length < 24) return;
     if (awdl.dataStatus.enabled && channel == awdl.channel && ItlAwdl::equalMac(bytes + 10, awdl.peer))
         awdlObserveData(bytes, length, channel, rssi, gp2, deaggregated);
@@ -1026,6 +1094,8 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     }
     awdl.lastPeerRxUs = awdlNowUs();
     awdl.lastPeerGp2 = gp2;
+    if (awdlNativeRadioOwner && ItlAwdl::syncWireProfile(bytes,length,&awdlNativePeerProfile))
+        ++awdlNativePeerProfileSamples;
     ItlAwdl::SyncAnnouncement announcement = {};
     ItlAwdl::ScheduleSample sample = {};
     if (ItlAwdl::parseSchedule(bytes, length, &announcement) == ItlAwdl::ScheduleResult::Valid &&
