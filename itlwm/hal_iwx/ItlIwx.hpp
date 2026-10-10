@@ -160,7 +160,7 @@ public:
     bool awdlCommandBusy() const { return awdl.commandBusy; }
     void awdlStop(uint32_t reason, uint32_t error = 0);
     void awdlDetach();
-    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t, bool);
+    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t, bool, bool);
     void awdlCountryHint(uint16_t, uint8_t);
 private:
     // Not part of the radio diagnostic context: radio resets must not erase

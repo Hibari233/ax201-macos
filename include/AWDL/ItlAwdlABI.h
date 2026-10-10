@@ -45,9 +45,9 @@ struct ItlAwdlTxStatusResponse {
 };
 struct ItlAwdlTimedFrameResponse {
     ItlAwdlFrameResponse frame; // Existing selector 3 still returns this prefix.
-    uint32_t clock_flags; // bit 0: firmware RX-on-air timestamps present.
+    uint32_t clock_flags; // bit 0: RX GP2 valid; bit 1: RX TSF valid (not PHY data).
     uint32_t gp2_us; // Local device clock, wraps at 2^32 us; resets on radio init.
-    uint64_t tsf_us; // Firmware RX TSF, kept separate from GP2 and host uptime.
+    uint64_t tsf_us; // Zero if bit 1 is clear. Separate from GP2 and host uptime.
 };
 struct ItlAwdlRegStatusResponse {
     uint32_t version, channel, channel_flags, query_count, last_query_error;

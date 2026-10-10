@@ -342,7 +342,7 @@ the 72-byte metadata in the queued path. The caller must not return or release
 the buffer after handoff. The management pool must outlive the peer manager's
 queued frames. Both helpers are nonvirtual and add no interface slots.
 
-The new kernel-only `receiveAction` adapter checks the work-loop gate, native
+The kernel-only `receiveAction` adapter checks the work-loop gate, native
 interface readiness and backend sync-enabled state before borrowing a buffer.
 It validates the wire-frame boundary and metadata source-MAC prefix, checks
 native capacity, and copies the action body without its 24-byte 802.11 header.
@@ -350,12 +350,35 @@ Pre-handoff failures return the lease; after handoff only the temporary pool
 retain is released. A zero return would mean handoff, not successful parsing,
 discovery or delivery. The current backend still rejects enable.
 
-This entry is **not connected to firmware RX**. In particular, the adapter
-does not guess the remaining receive metadata or convert Intel timestamps.
-The hardware-to-native metadata conversion, native sync activation, complete
-TLV semantics and runtime buffer ownership still need qualification. Offline
-checks cover malformed/truncated wire boundaries, source mismatch, fragments
-and size limits. The two management-buffer compile fixtures matched 71 native
+This entry is **not connected to firmware RX**. It now accepts a typed receive
+context and encodes a zero-initialized, aligned 72-byte native header. The
+audited native producer supplies a source MAC at 0, a 12-byte channel at
+`0x0c`, signed RSSI at `0x2c`, and a 32-bit local on-air clock at `0x30`, in
+x86_64 host endian. The channel encoding currently supports only 20 MHz
+2.4/5 GHz reception. It describes reception, not regulatory permission to
+use a channel or transmit. The rate word at `0x28` remains zero because its
+unit conversion has not been qualified. `0x40` is a chain-RSSI validity word
+and `0x44` contains four signed RSSI bytes, **not a timestamp high word**;
+both remain zero. All other unimplemented fields remain zero as well.
+
+The caller must supply a valid local on-air microsecond clock in the same
+domain as the future sync backend. Host delivery time, the remote frame's
+PHY timestamp and Intel's per-MAC TSF must not be substituted for one another.
+The live GP2/sync-state mapping and the native rate representation are still
+unqualified, so successful encoding does not authorize native receive input.
+Separately, timed radio diagnostics now distinguish valid GP2 (flag bit 0)
+from valid TSF (bit 1). A TSF union marked `IWX_RX_MPDU_PHY_TSF_OVERLOAD` is
+PHY data: its exported TSF value is zero and bit 1 is clear. Older captures
+without bit 1 do not establish TSF validity; GP2 schedule analysis is unchanged.
+
+The adapter rejects duplicate/short synchronization TLVs and zero AW period
+or presence before allocation. Native sync parsing was also observed to
+reject zero presence before entering its peer-timeline calculation. This is
+not a complete audit of every native TLV handler. Native sync activation,
+full TLV semantics and runtime buffer ownership still need qualification.
+Offline checks cover native header bytes, malformed/truncated boundaries,
+source mismatch, fragments, size limits, channel/RSSI/clock rejection and TSF
+union validity. The two management-buffer compile fixtures matched 71 native
 virtual slots; this establishes declarations, not live receive behavior.
 
 ## Request extents

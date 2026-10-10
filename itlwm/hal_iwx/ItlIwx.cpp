@@ -5941,7 +5941,8 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         // Observe without changing ownership or length. STA firmware does
         // not append FCS. Normal decrypt/reorder/net80211 processing follows.
         awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf,
-                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU));
+                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU),
+                    bool(le16toh(desc->phy_info) & IWX_RX_MPDU_PHY_TSF_OVERLOAD));
     }
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
         uint32_t channel = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ? desc->v3.channel : desc->v1.channel;
@@ -5958,7 +5959,8 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         uint64_t tsf = le64toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
                              desc->v3.tsf_on_air_rise : desc->v1.tsf_on_air_rise);
         awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf,
-                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU));
+                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU),
+                    bool(le16toh(desc->phy_info) & IWX_RX_MPDU_PHY_TSF_OVERLOAD));
         mbuf_freem(m);
         return;
     }

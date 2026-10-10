@@ -46,9 +46,12 @@ const OSMetaClass *nativePeerClass() {
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
-    const void *metadata, size_t metadataLength) {
+    const ItlAwdl::NativeActionRxContext &rx) {
+    ItlAwdl::NativeActionMetadata metadata = {};
     ItlAwdl::NativeActionView view = {};
-    if (!ItlAwdl::nativeActionView(frame, length, metadata, metadataLength, &view))
+    if (!frame || length < 24 ||
+        !ItlAwdl::encodeNativeActionMetadata(frame + 10, rx, &metadata) ||
+        !ItlAwdl::nativeActionView(frame, length, metadata.bytes, sizeof(metadata), &view))
         return kIOReturnBadArgument;
     auto loop = getWorkLoop();
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
@@ -73,10 +76,8 @@ IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t leng
     memcpy(bytes, view.body, view.length);
     buffer->setLength(view.length);
     // Native input may queue the buffer and copies 72 metadata bytes in that
-    // case. Keep a local mutable header; never hand it a caller's const memory.
-    alignas(8) uint8_t header[ItlAwdl::NativeActionMetadataLength];
-    memcpy(header, metadata, sizeof(header));
-    bpfTapInput(buffer, 12, header, sizeof(header));
+    // case. The encoded header is local and mutable, never caller-owned.
+    bpfTapInput(buffer, 12, metadata.bytes, sizeof(metadata));
     // The buffer was consumed, including native disabled/drop paths. Its
     // controller-owned pool remains alive through peer-manager teardown.
     pool->release();

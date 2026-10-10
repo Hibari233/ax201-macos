@@ -3,6 +3,7 @@
 #include <Airport/Apple80211.h>
 #include <Airport/macOS15/IO80211AWDLProtocol.h>
 #include <AWDL/ItlAwdlABI.h>
+#include <AWDL/AwdlNativeMetadata.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -44,9 +45,9 @@ public:
     SInt32 setInterfaceEnable(bool) override;
     IOReturn prepareBSDInterface(ifnet_t, unsigned int) override;
     // Future radio RX entry, under this interface's work-loop gate. Receive
-    // metadata must already use the audited native 72-byte representation.
-    // No RF callback is connected to this entry until that conversion exists.
-    IOReturn receiveAction(const uint8_t *, size_t, const void *, size_t);
+    // context must already use the synchronization backend's local RX clock.
+    // No RF callback is connected until that clock/backend is qualified.
+    IOReturn receiveAction(const uint8_t *, size_t, const ItlAwdl::NativeActionRxContext &);
     IOReturn setMacAddress(ether_addr &) override { return kIOReturnUnsupported; }
 #define ITL_NATIVE_REQUEST(name, type) \
     IOReturn name(type *data) override { \

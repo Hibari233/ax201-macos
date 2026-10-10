@@ -5,6 +5,7 @@
 #include <AWDL/AwdlData.h>
 #include <AWDL/AwdlEcho.h>
 #include <AWDL/AwdlRegulatory.h>
+#include <AWDL/AwdlRxClock.h>
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -790,7 +791,8 @@ void ItlIwx::awdlDetach() {
     }, this);
 }
 
-void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2, uint64_t tsf, bool deaggregated) {
+void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
+    uint64_t tsf, bool deaggregated, bool tsfOverloaded) {
     ++awdl.rxTotal;
     size_t length = mbuf_pkthdr_len(m);
     // RX MPDUs are contiguous here. Reject unexpectedly fragmented buffers.
@@ -828,7 +830,10 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     if (awdl.count == ITL_AWDL_RING_COUNT) { ++awdl.rxDropped; return; }
     auto &record = awdl.ring[(awdl.head + awdl.count) % ITL_AWDL_RING_COUNT];
     bzero(&record, sizeof(record));
-    record.clock_flags = 1; record.gp2_us = gp2; record.tsf_us = tsf;
+    const auto clocks = ItlAwdl::receiveClockSample(gp2, tsf, tsfOverloaded);
+    record.clock_flags = clocks.flags;
+    record.gp2_us = clocks.gp2Us;
+    record.tsf_us = clocks.tsfUs;
     auto &frame = record.frame;
     frame.version = ITL_AWDL_ABI_VERSION; frame.length = uint32_t(length);
     frame.channel = channel; frame.rssi_dbm = rssi;

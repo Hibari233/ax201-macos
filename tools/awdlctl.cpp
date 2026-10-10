@@ -276,7 +276,8 @@ int main(int argc, char **argv) {
                 for (unsigned i = 0; i < frame.length; ++i) printf("%02x", frame.frame[i]);
                 printf("\"");
                 if (timed) {
-                    printf(",\"clock_flags\":%u,\"gp2_us\":%u,\"tsf_us\":%llu", record.clock_flags, record.gp2_us, (unsigned long long)record.tsf_us);
+                    printf(",\"clock_flags\":%u,\"gp2_us\":%u,\"tsf_us\":%llu,\"tsf_valid\":%s", record.clock_flags, record.gp2_us, (unsigned long long)record.tsf_us,
+                           (record.clock_flags & 2) ? "true" : "false");
                     ItlAwdl::SyncAnnouncement sync = {}; ItlAwdl::ScheduleSample estimate = {};
                     auto parsed_sync = ItlAwdl::parseSchedule(frame.frame, frame.length, &sync);
                     printf(",\"schedule_parse\":%u", unsigned(parsed_sync));
