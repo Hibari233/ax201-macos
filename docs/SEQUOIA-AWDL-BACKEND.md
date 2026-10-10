@@ -858,3 +858,18 @@ it is not a measured RF timestamp. A missing match cannot prove no response
 exists, particularly if a scan was truncated or notification raced the sample.
 The unchanged completion deadline may still fail even with an earlier observed
 DMA response. This experiment does not enable operational synchronization.
+
+### Listener MAC transmit parameters
+
+The original monitor branch returned before initializing MAC basic rates and
+EDCA parameters. Intel's [listener/common MAC-context path in Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/mvm/mac-ctxt.c)
+populates these fields for a listener as well. The bounded native TX lease now
+supplies mandatory fallback rates and the port's standard OFDM EDCA table,
+including all four FIFO masks. It does not reuse the previous infrastructure
+AP's negotiated settings or change the rate carried in the TX command.
+
+This correction applies only while the retained native manager explicitly owns
+the native TX qualification lease. Ordinary STA and passive monitor paths are
+unchanged. It is a configuration correction to test, not a demonstrated cause
+of the 25–37 ms completion delay. The 5 ms completion guard remains in force;
+native interface enablement and operational synchronization remain disabled.

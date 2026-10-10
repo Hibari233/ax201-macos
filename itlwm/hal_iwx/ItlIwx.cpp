@@ -8752,6 +8752,25 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
             IEEE80211_ADDR_COPY(cmd->node_addr,awdlNativeAddress);
 #endif
         IEEE80211_ADDR_COPY(cmd->bssid_addr, etherbroadcastaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && awdlNativeTxQualification) {
+            // A listener that injects frames still needs a populated MAC TX
+            // context, as in iwlwifi's mac_ctxt_cmd_listener/common path.
+            // There is no associated BSS: use mandatory fallback rates and
+            // standard OFDM EDCA, not the previous infrastructure AP's state.
+            cmd->cck_rates = htole32(IEEE80211_IS_CHAN_2GHZ(ic->ic_ibss_chan) ? 1 : 0);
+            cmd->ofdm_rates = htole32(IWX_RATE_BIT_MSK(6) >> IWX_FIRST_OFDM_RATE);
+            for (i = 0; i < EDCA_NUM_AC; ++i) {
+                const auto &ac = ieee80211_edca_table[IEEE80211_MODE_11G][i];
+                const auto ucode_ac = iwx_mvm_mac80211_ac_to_ucode_ac((enum ieee80211_edca_ac)i);
+                cmd->ac[ucode_ac].cw_min = htole16(IWX_EXP2(ac.ac_ecwmin));
+                cmd->ac[ucode_ac].cw_max = htole16(IWX_EXP2(ac.ac_ecwmax));
+                cmd->ac[ucode_ac].aifsn = ac.ac_aifsn;
+                cmd->ac[ucode_ac].fifos_mask = 1 << iwx_ac_to_tx_fifo[i];
+                cmd->ac[ucode_ac].edca_txop = htole16(ac.ac_txoplimit * 32);
+            }
+        }
+#endif
         return;
     }
     

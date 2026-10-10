@@ -940,3 +940,45 @@ router pings passed 36/36 and retained health assertions passed. The same native
 manager remained disabled and unpublished. The next diagnostic inspects only
 completed DMA buffers between clock polls to look for an earlier matching
 response, without consuming it or changing the 5 ms completion limit.
+
+## TX response visibility before interrupt delivery — 2026-10-10
+
+Source `bfd3d1557e9840cd6b5e9e9e3b4b71685ca70308` (revision 37):
+
+- Binary SHA-256: `b9f68d65b028e34f6f6d4cbc7cc93e2c85a21a1cee0bc82e0b37845c5612c587`
+- Loaded UUID: `AB285F3F-953E-397A-8738-6A9E26271482`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38056837467)
+  passed all three jobs; local UBSan and both native ABI checks passed. The
+  installed candidate retained a verified revision 36 rollback.
+
+All 384 initialization contracts, configuration/template checks and two passive
+RF sessions passed. The synchronization TX trial submitted one 210-byte frame
+and received one successful firmware completion. Its **30,280 us** GP2 interval
+again failed the unchanged 5,000 us qualification limit. No second frame was
+submitted and no pending or aborted TX remained.
+
+The passive observer sampled published, closed DMA buffers 23 times. It first
+found the matching response **29,511 us after the TX doorbell**, reporting the
+same success status and 168 us media duration as the normal completion path.
+The interrupt filter ran at 30,154 us; gated processing reached the completion
+measurement 85 us later. Final pre-submit GP2 read to doorbell took 8 us.
+Observer support was confirmed and no bounded scan was truncated.
+
+This run did not find an early completion sitting in a closed DMA buffer for
+most of the delay. It still cannot distinguish late wireless transmission,
+firmware response generation or DMA publication. Neither a firmware success
+code nor the media duration proves peer reception or actual RF timing.
+
+Wi-Fi was restored before the harness reported the timing failure. WPA2 router
+pings passed 36/36, and retained GPU/display/power assertions passed. The same
+single native manager remained unpublished and disabled, with no native RX
+handoff, discovery or verified AirDrop transfer. Independent peer observation
+is the next investigation; the timing guard remains unchanged.
+
+A separate, bounded trial retained that same manager and stopped after one
+completion at 37,198 us. An owned-address-filtered capture on a nearby native
+Mac's `awdl0` produced no records in either advertised private/raw format.
+There was no positive control establishing management-frame visibility, so
+this capture cannot show whether the peer received the transmission. That
+trial restored Wi-Fi (9/9 router pings) and passed the retained health checks.
+No further identical RF trial is justified by those empty captures.
