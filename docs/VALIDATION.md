@@ -1262,3 +1262,35 @@ power checks before recording the failed timing assertion. Boot continuity was
 also checked using the boot-session UUID because wall-clock adjustment changes
 the reported boot time. No native interface, queues or RX handoff were enabled.
 Native AirDrop remains unavailable.
+
+## Pending radio readiness and wire profile — 2026-10-11
+
+Source `8c62e2c84297b1b5319b63a7333ef6522d9d8042` (revision 46), binary
+`8f43282e319cfc5d2b0a055ffcf8b9030d7685d466ad3981a4cb7d6551dda8c5`, loaded
+UUID `7A903631-15DB-3E67-996F-BB5E42F84C6A`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38067611066)
+passed all three jobs. Twelve local C++ UBSan suites, five Python checks,
+both 560-slot/63-method ABI comparisons, 384 runtime initialization contracts
+and the configuration/timing/template baseline passed. Rollback is revision 45.
+
+The bounded unicast again completed successfully in firmware, without retries,
+but took **24,292 us** from the encoded timestamp. Its addressed ACK was at
+**23,055 us**, followed by completion 1,237 us later. All **18** pending MAC
+status samples had clock-ready set, with no going-to-sleep or invalid samples.
+This sample does not support the hypothesis that the device remained asleep
+while waiting. Before matching ACK delivery, the observer counted five decoded
+frames (one management, four control; 695 bytes), with receive offsets from
+12,636 to 20,083 us and a maximum Duration reservation of **8,000 us**.
+Decoded frames are not a CCA busy-time measurement, and this does not establish
+the complete cause of the delay. The 5 ms qualification still failed.
+
+The owned peer's current profile used flags `0x1800`, alignment zero, 16-TU
+period/common/extension, presence four, and a separate channel/opclass plan.
+Its advertised plan had channel 149/opclass 128 at slots 0, 2 and 10,
+channel 6/opclass 81 at slot 8, and unavailable slots elsewhere. This is a
+passive observation, not permission to transmit on channel 149.
+
+The detached harness restored WPA2 (42/42 pings), preserved the retained
+manager, and passed GPU/display/power checks before reporting failed timing.
+The receiving Mac still had no transmitter database entry. No operational
+native interface, RX handoff or file transfer was enabled.
