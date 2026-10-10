@@ -326,6 +326,38 @@ runtime check therefore verifies rejected enable calls, clear `IFF_RUNNING`,
 disabled queues and zero callbacks; it does not treat command exit status as
 radio readiness. No native error-return or flag state is patched.
 
+## Management-frame input boundary
+
+The native management-frame path uses `IO80211BufferPool` / `IO80211Buffer`,
+separate from Skywalk data packets. Their 24H32 native base extents are `0x10`
+and `0x18`; the pool derives directly from `OSObject`. Pool get/return are
+virtual slots `0x118` / `0x120`. The base implementations panic, so only a
+concrete pool returned by the interface may be called, using virtual dispatch.
+The buffer's native `setLength` stores a 32-bit length without checking capacity.
+
+`VirtualInterface::getMgmtFramePool()` returns the controller's borrowed pool.
+The buffer overload of `bpfTapInput(..., 12, metadata, 72)` forwards the lease to
+the native peer manager. Native input either returns it or queues it, copying
+the 72-byte metadata in the queued path. The caller must not return or release
+the buffer after handoff. The management pool must outlive the peer manager's
+queued frames. Both helpers are nonvirtual and add no interface slots.
+
+The new kernel-only `receiveAction` adapter checks the work-loop gate, native
+interface readiness and backend sync-enabled state before borrowing a buffer.
+It validates the wire-frame boundary and metadata source-MAC prefix, checks
+native capacity, and copies the action body without its 24-byte 802.11 header.
+Pre-handoff failures return the lease; after handoff only the temporary pool
+retain is released. A zero return would mean handoff, not successful parsing,
+discovery or delivery. The current backend still rejects enable.
+
+This entry is **not connected to firmware RX**. In particular, the adapter
+does not guess the remaining receive metadata or convert Intel timestamps.
+The hardware-to-native metadata conversion, native sync activation, complete
+TLV semantics and runtime buffer ownership still need qualification. Offline
+checks cover malformed/truncated wire boundaries, source mismatch, fragments
+and size limits. The two management-buffer compile fixtures matched 71 native
+virtual slots; this establishes declarations, not live receive behavior.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`

@@ -5,6 +5,7 @@
 #include <Airport/macOS15/IO80211NetworkPacket.h>
 #include <Airport/macOS15/IOSkywalkTxSubmissionQueue.h>
 #include <Airport/macOS15/IOSkywalkRxCompletionQueue.h>
+#include <Airport/macOS15/IO80211ManagementBuffer.h>
 
 // Force compiler vtables for every packet base, including the pool release
 // override. Compare these object-file relocations to the target's native ABI.
@@ -17,6 +18,8 @@ ABI_FIXTURE(SequoiaNetworkPacketAbiTest, IOSkywalkNetworkPacket)
 ABI_FIXTURE(SequoiaWifiPacketAbiTest, IO80211NetworkPacket)
 ABI_FIXTURE(SequoiaTxQueueAbiTest, IOSkywalkTxSubmissionQueue)
 ABI_FIXTURE(SequoiaRxQueueAbiTest, IOSkywalkRxCompletionQueue)
+ABI_FIXTURE(SequoiaManagementPoolAbiTest, IO80211BufferPool)
+ABI_FIXTURE(SequoiaManagementBufferAbiTest, IO80211Buffer)
 #undef ABI_FIXTURE
 static_assert(sizeof(SequoiaPacketPoolAbiTest) == 0xb8, "Pool fixture extent");
 static_assert(sizeof(SequoiaPacketAbiTest) == 0x70, "Packet fixture extent");
@@ -24,6 +27,8 @@ static_assert(sizeof(SequoiaNetworkPacketAbiTest) == 0x78, "Network packet fixtu
 static_assert(sizeof(SequoiaWifiPacketAbiTest) == 0x78, "Wi-Fi packet fixture extent");
 static_assert(sizeof(SequoiaTxQueueAbiTest) == 0x168, "TX queue fixture extent");
 static_assert(sizeof(SequoiaRxQueueAbiTest) == 0x138, "RX queue fixture extent");
+static_assert(sizeof(SequoiaManagementPoolAbiTest) == 0x10, "Management pool fixture extent");
+static_assert(sizeof(SequoiaManagementBufferAbiTest) == 0x18, "Management buffer fixture extent");
 static_assert(__is_same(decltype(static_cast<IOSkywalkPacketQueue *>(nullptr)->initialize(nullptr)),
                         IOReturn), "Queue initialization returns IOReturn");
 static_assert(__is_same(decltype(static_cast<IOSkywalkRxCompletionQueue *>(nullptr)->enqueuePackets(nullptr, 0, 0)),

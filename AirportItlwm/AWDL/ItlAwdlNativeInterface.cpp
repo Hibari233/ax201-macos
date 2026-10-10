@@ -3,6 +3,8 @@
 #include "ItlAwdlNativePacket.hpp"
 #include "ItlAwdlNativeQueues.hpp"
 #include "AirportItlwmV2.hpp"
+#include <Airport/macOS15/IO80211ManagementBuffer.h>
+#include <AWDL/AwdlNativeFrame.h>
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
 #include <libkern/c++/OSSymbol.h>
@@ -42,6 +44,44 @@ const OSMetaClass *nativePeerClass() {
 }
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
+
+IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
+    const void *metadata, size_t metadataLength) {
+    ItlAwdl::NativeActionView view = {};
+    if (!ItlAwdl::nativeActionView(frame, length, metadata, metadataLength, &view))
+        return kIOReturnBadArgument;
+    auto loop = getWorkLoop();
+    if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
+        isInactive() || !bsdPublishRequested || !getBSDInterface() ||
+        !startAttempted || !isInterfaceEnabled()) return kIOReturnNotReady;
+    // Publishing or administratively raising awdl0 must not admit frames
+    // before an implemented backend has actually started synchronization.
+    apple80211_awdl_sync_enabled sync = {};
+    sync.version = 1;
+    if (getAWDL_SYNC_ENABLED(&sync) || !sync.enabled) return kIOReturnNotReady;
+    auto pool = getMgmtFramePool();
+    if (!pool) return kIOReturnNotReady;
+    pool->retain();
+    auto buffer = pool->getBuffer();
+    if (!buffer) { pool->release(); return kIOReturnNoResources; }
+    auto bytes = buffer->getBytesNoCopy();
+    if (!bytes || view.length > buffer->getCapacity() || view.length > UINT32_MAX) {
+        buffer->returnBuffer();
+        pool->release();
+        return kIOReturnNoSpace;
+    }
+    memcpy(bytes, view.body, view.length);
+    buffer->setLength(view.length);
+    // Native input may queue the buffer and copies 72 metadata bytes in that
+    // case. Keep a local mutable header; never hand it a caller's const memory.
+    alignas(8) uint8_t header[ItlAwdl::NativeActionMetadataLength];
+    memcpy(header, metadata, sizeof(header));
+    bpfTapInput(buffer, 12, header, sizeof(header));
+    // The buffer was consumed, including native disabled/drop paths. Its
+    // controller-owned pool remains alive through peer-manager teardown.
+    pool->release();
+    return kIOReturnSuccess; // Handoff only; not a parsed or discovered peer.
+}
 
 IOReturn ItlAwdlNativeInterface::enable(unsigned int options) {
     ++bsdEnableCalls;
