@@ -1084,3 +1084,42 @@ pending or aborted. The same disabled manager survived, WPA2 passed another
 9/9 router pings, and GPU/display/power assertions passed. The next diagnostic
 will qualify the receiving peer's advertised channel window as well as the
 local window before permitting another bounded transmission.
+
+## Peer channel-window qualification — 2026-10-10
+
+Source `7399ac5f3b9681f34c2d8b95d3d5b7289513378b` (revision 41):
+
+- Binary SHA-256: `638c45f355872ea22c93c309ce98638254ac047c01813e792642f7d61876ba78`.
+- Loaded UUID: `CC7906FD-2CF0-3A74-A7B2-344A816EAF34`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38062777019)
+  passed all three jobs. Twelve local C++ UBSan suites and five Python checks
+  passed, including peer-window boundaries, stale clocks, schedule confidence,
+  channel mismatch and wraparound. Both native ABI comparisons passed all
+  560 slots/63 backend methods. Revision 40 is retained as the verified rollback.
+
+The loaded build passed 384 initialization contracts, native configuration and
+timing roundtrip, template generation and four stability samples. Two passive
+three-second RF sessions heard 21 and 16 owned-peer actions and produced 131
+and 132 coherent clock/encoding samples. The diagnostic ring dropped 5 and 0
+records respectively, with no invalid frame; schedule tracking precedes that
+ring and continues when the diagnostic record buffer is full.
+
+| Peer-window outcome | First session | Second session |
+| --- | ---: | ---: |
+| Total sampled clocks | 133 | 134 |
+| Clock not yet qualified | 12 | 7 |
+| Schedule unavailable | 10 | 34 |
+| Advertised channel differs | 105 | 85 |
+| Too close to a window edge | 1 | 3 |
+| Peer window ready on channel 6 | 5 | 5 |
+| Both local and peer windows overlap | **0** | **0** |
+
+The peer did advertise usable channel-6 windows during these sessions, but none
+overlapped the independently started local qualification timeline. No TX trial
+was run. This explains a missing availability condition in earlier trials;
+it does not by itself explain the firmware completion delay or prove an RF
+drop. The next step is controlled phase alignment using the owned peer's
+coherent RX hardware clock, with timing/profile checks and the existing TX
+limits intact. One unpublished manager remained, WPA2 passed 33/33 router
+pings, and before/after GPU/display/power assertions passed. Native AirDrop
+remains unavailable.
