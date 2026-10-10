@@ -1427,3 +1427,31 @@ completed detached harness. The receiving Mac reported no transmitter entry
 in 211 read-only observations. P2P-device selection alone has not resolved
 the timing failure or established native discovery. Rollback is revision 50;
 native synchronization, RX handoff and AirDrop transfers remain disabled.
+
+## Management-TX protection comparison — 2026-10-11
+
+Source `74b5790b76430ff152f0053722549aacc1e7d09f` (revision 52), binary
+`b636798c7e72b1769b48357e9913b1f9474ef4d46c19d329405c3817d0b33886`, loaded
+UUID `1379AFB7-9454-371E-ABCC-88638932F7D8`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38072566847)
+passed all three jobs. Local 13-suite UBSan/five-Python tests, both native ABI
+comparisons, the 384-contract baseline and listener/P2P receive regressions
+passed. Both discovery-profile receive leases captured 20 owned-peer AWDL
+frames, with zero invalid frames and four ring overflow drops each.
+
+The unicast selector requested configuration 3, matching Intel's management-TX
+ROC mapping, and received the corresponding successful START. It submitted one
+frame, which firmware completed successfully at **22,663 us** after the encoded
+clock value. Doorbell-to-completion was 22,594 us; the first matching RX batch
+reached the interrupt filter at 22,548 us. Firmware reported 12 Mbps OFDM,
+228 us media duration, no retries and no Bluetooth kills. All 17 sampled MAC
+states were awake, but no independent ACK timestamp was observed. The unchanged
+5 ms guard stopped the test. This one comparison does not establish that the
+smaller delay than revision 51 was caused by the profile change.
+
+The same boot and retained manager survived; P2P state and MAC identity restored,
+WPA2 passed 51/51 pings and GPU/display/power checks passed. The receiving Mac
+found no transmitter entry in 211 observations. Rollback is revision 51.
+Native AirDrop remains unavailable. All recent timing trials stopped after
+the first over-limit frame following radio startup, so they do not yet
+distinguish first-frame initialization cost from persistent per-frame delay.
