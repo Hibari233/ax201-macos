@@ -1011,3 +1011,14 @@ host TX count for review. The listener selectors are preserved, with the
 pre-existing 20 ms GP2 read cadence restored after the unsuccessful 2 ms trial.
 This is a radio lifecycle preflight; native SYNC, BSD publication and queues
 remain disabled. Hardware results belong in `VALIDATION.md`.
+
+Root-only selector 33 / capability bit 4194304 adds the separate
+`p2p-sync-unicast[-selftest]` diagnostic. It retains the qualified discovery
+protection and broadcast-station lifecycle, adding the same fixed owned-peer
+MIF used by the listener comparison. Submission requires a successful START
+in the current firmware generation; END, failure, stop or reset closes that
+gate. It preserves current-channel/regulatory checks, fresh owned-peer RX and
+clock/window qualification, NAV deferral, one outstanding frame, the four-frame
+limit and the 5 ms completion guard. It accepts neither caller payloads nor
+broadcast TX. Selector 32 remains a no-host-TX preflight. Native AirDrop is
+still disabled; firmware success alone does not establish peer discovery.

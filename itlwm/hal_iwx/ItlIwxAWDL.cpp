@@ -42,7 +42,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 4194303; // Bit 21: exclusive P2P-device RX trial. No native AirDrop.
+            out->capabilities = 8388607; // Bit 22: bounded P2P-device unicast trial. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -364,6 +364,8 @@ IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled, b
     if (native) {
         if (!awdlNativeTxQualification || !awdlNativeRadioOwner || owner != awdlNativeRadioOwner ||
             data || scheduled) return kIOReturnNotPermitted;
+        if (awdlNativeP2pQualification && !awdlNativeP2pSession.ready(com.sc_generation))
+            return kIOReturnNotReady;
     } else if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
@@ -710,7 +712,7 @@ int ItlIwx::awdlStartNativeP2pSession() {
         ItlAwdl::P2pSessionProtection::Configuration == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV,
         "P2P notification identity matches the firmware command");
     auto in = reinterpret_cast<iwx_node *>(com.sc_ic.ic_bss);
-    if (!awdlNativeRadioOwner || !awdlNativeP2pQualification || awdlNativeTxQualification ||
+    if (!awdlNativeRadioOwner || !awdlNativeP2pQualification ||
         !in || in->in_id != ItlAwdl::P2pSessionProtection::MacId || in->in_color ||
         com.sc_ic.ic_opmode != IEEE80211_M_MONITOR || !awdlActive()) return EINVAL;
     awdlNativeP2pCommandVersion = iwx_lookup_cmd_ver(&com,IWX_MAC_CONF_GROUP,IWX_SESSION_PROTECTION_CMD);

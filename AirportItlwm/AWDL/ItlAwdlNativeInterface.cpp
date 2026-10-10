@@ -782,7 +782,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
         request->channel || request->reserved || request->padding[0] || request->padding[1] ||
         request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer) ||
-        (tx && out != &tx->radio) || (unicast && !tx) || (p2p && tx))
+        (tx && out != &tx->radio) || (unicast && !tx) || (p2p && tx && !unicast))
         return kIOReturnBadArgument;
     if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
     auto gate = radio->getMainCommandGate();
