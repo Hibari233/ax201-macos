@@ -244,11 +244,52 @@ combined harness stopped at the init result, so its planned concurrent-denial
 test did not run. These observations qualify containment only, not repeated
 native creation or AirDrop.
 
+## Revision 14 retained native object validation (2026-10-10)
+
+The same AX201 / Sequoia 24H32 host loaded
+`7736e7e82d3b4fe07a0f7fa91d4a29961825ac10`:
+
+- Binary SHA-256: `c78c0e6277fc9ee98e7a29940a5d3d520bc52e4c6efb232c501d36e46333b53b`
+- Loaded UUID: `1D4F3DFF-FBFA-302F-899C-710BF2A803A7`; matched the built image
+  and guarded EFI installation. Revision 13c is backed up.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38035401355)
+  passed all three jobs. The fixture and actual compiled native class each
+  matched 560 slots and 63 backend methods.
+
+Twenty-four malformed-request checks passed; a non-root client was denied.
+The revised init-only cleanup wait passed eight cycles in each of the three
+phases, plus eight complete cycles after native retirement: **32 cycles and
+2,048 dispatch checks**, with settled instance counts and no remaining opens
+or method errors. Four injected peer-creation failures passed before the
+retained object, and four more passed after retirement.
+
+One real role-6 object and one Apple AWDL peer manager were retained across
+five additional create requests from separately opened/closed clients. The
+registry ID stayed identical throughout the bounded observation of at least
+50 seconds, with exactly one interface and peer manager, one controller open,
+and the expected native controller pointer. Competing init/start probes were
+denied while it existed. The native registry entry reported current/device
+power state 1. There was no BSD interface and no native backend request; this
+does not qualify radio operation or real power transitions.
+
+Explicit retirement returned both instance counts, the controller open and
+AWDL pointer to zero. A second retirement was harmless. Recreating through
+either the retained API or the older real-start probe was denied; injected
+failures and init-only tests did not reset that restriction. No new panic
+report appeared. The host stayed connected, all 10 Wi-Fi-route pings during
+the retained period succeeded, and final GPU/display health checks passed
+with the existing 240 Hz configuration.
+
+This validates bounded ownership and containment on this image. It does not
+validate sustained idle, controller unload, simultaneous client races, native
+packet queues, concurrent STA/AWDL RF operation, discovery or AirDrop transfer.
+The diagnostic object was retired at the end; nothing starts it at boot.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Revisions 10–12 identities verified above; release matrix remains incomplete |
+| Fresh public-fork binary boot and loaded-hash verification | Revision 14 and earlier tested image identities verified above; release matrix remains incomplete |
 | WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 10/10 final Wi-Fi pings; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
@@ -256,8 +297,8 @@ native creation or AirDrop.
 | Peer AWDL RX while STA stays associated on the same channel | Pending |
 | Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
-| Native role-6 object initialization/disposal | 27 bounded cycles passed; start, queues and BSD registration still pending |
-| Native role-6 start/stop | Single cycle passed; recreation caused a confirmed logging panic on 24H32; boot-scoped containment under validation |
+| Native role-6 object initialization/disposal | Revision 14 passed 32 cycles and 2,048 dispatch checks with deferred cleanup accounted for |
+| Native role-6 start/stop | One retained object reused across clients, then retired; recreation denied after the confirmed 24H32 logging panic |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |
