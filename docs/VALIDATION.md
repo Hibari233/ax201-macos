@@ -53,16 +53,60 @@ Passing these checks demonstrates only those tested properties. Build manifests
 set `runtime_validated: false`; a newly compiled binary inherits no hardware
 pass result merely because the source is similar to the earlier prototype.
 
+## Revision 10 bounded receive validation (2026-10-10)
+
+The same development AX201, PCI ID `0x7af0`, Sequoia 15.8.1 (24H32), loaded
+revision 10 build 1 from source commit
+`a1f6b81a0769b227566f0bbfc7a9fb25889e2331`:
+
+- Binary SHA-256: `27ae295f5322fc302f745eadf69e90d3401a8711502c1dec744786385c498c48`.
+- Loaded UUID: `5D01C2C8-8E5A-3F59-A045-54BCE05FA7CB`; matched the locally built
+  binary. Staged signature and guarded EFI file hashes were verified.
+- [CI for this source](https://github.com/Hibari233/ax201-macos/actions/runs/38026710869)
+  passed Linux ASan/UBSan and both Sequoia builds. The data suite also passed
+  native Intel macOS ASan/UBSan and local UBSan.
+
+An owned Mac generated AWDL traffic. Tests used exclusive receive-only monitor
+on channel 149 with ordinary Wi-Fi temporarily powered off; management remained
+on Ethernet. These are received **records**, not necessarily unique packets:
+
+| Bounded test | Observation |
+| --- | --- |
+| 20-second timeout | 194 IPv6 records: 186 ICMPv6 and 8 UDP; 298 peer management records |
+| Explicit close before a 30-second deadline | 220 IPv6 fragments: 110 of 1280 bytes and 110 of 276 bytes; 18 active/cleanup checks passed |
+| Test process exits without closing the client | Driver returned to STA/idle, cleared data mode and queue |
+| 1280-byte ICMPv6, explicit close | 108 records, all 108 transport checksums valid; 19 active/cleanup checks passed |
+| 1500-byte unfragmented stimulus | Zero accepted data records despite peer management RX; unresolved, **not a pass** |
+
+All receive sessions reported zero malformed/unsupported records and zero queue
+overflow. This does not count frames the firmware never delivered or frames
+excluded by the peer/channel/protocol filters. The first two captures predate
+the checksum client; no checksum claim is made for those captures. IPv6 fragment
+reassembly was not tested. Offline fixtures cover the 1500-byte decoder bound,
+but that does not qualify real 1500-byte reception.
+
+The prior 33 ABI checks and 11 new data ABI checks passed before each session.
+Timeout, explicit close and client death restored STA mode; Wi-Fi rejoined its
+WPA2 2.4 GHz network after the power restore. Final router connectivity over
+the Wi-Fi interface was 10/10 pings. Display/GPU configuration was retained;
+whole-system sleep was not tested.
+
+This validates a diagnostic receive path only. It does not validate data TX,
+peer election, concurrent STA + AWDL operation, native interface integration or
+AirDrop file transfer. Later source builds do not inherit this exact binary's
+hardware observations automatically.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Pending |
-| WPA2 2.4 GHz connect/reconnect and throughput | Prototype bounded connectivity only |
+| Fresh public-fork binary boot and loaded-hash verification | Revision 10 build 1 identity verified above; release matrix remains incomplete |
+| WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 10/10 final Wi-Fi pings; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
 | WPA3-only with mandatory PMF, wrong password, rekey | Unsupported / pending implementation |
 | Peer AWDL RX while STA stays associated on the same channel | Pending |
+| Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |

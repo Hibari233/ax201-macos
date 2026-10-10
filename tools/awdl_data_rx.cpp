@@ -71,15 +71,16 @@ static bool number(const char *s, unsigned long *out) {
 }
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: awdl_data_rx status|selftest|listen|expire|die CHANNEL SECONDS OWNED_PEER_MAC\n"
+        fprintf(stderr, "Usage: awdl_data_rx status|selftest|listen|expire|close|die CHANNEL SECONDS OWNED_PEER_MAC\n"
                         "Wi-Fi must be off for capture; restore it after this program. Ethernet is recommended.\n");
         return 2;
     }
     bool status = !strcmp(argv[1], "status"), test = !strcmp(argv[1], "selftest");
     bool listen = !strcmp(argv[1], "listen"), expire = !strcmp(argv[1], "expire"), die = !strcmp(argv[1], "die");
+    bool closeEarly = !strcmp(argv[1], "close");
     ItlAwdlBeginRequest b = {}; b.version = 1;
-    if ((!status && !test && !listen && !expire && !die) || ((status || test) && argc != 2)) return 2;
-    if (listen || expire || die) {
+    if ((!status && !test && !listen && !expire && !die && !closeEarly) || ((status || test) && argc != 2)) return 2;
+    if (listen || expire || die || closeEarly) {
         unsigned long channel = 0, seconds = 0; unsigned mac[6]; char extra;
         if (argc != 5 || !number(argv[2], &channel) || !number(argv[3], &seconds) ||
             (channel != 6 && channel != 44 && channel != 149) || seconds < 1 || seconds > 30 ||
@@ -95,6 +96,9 @@ int main(int argc, char **argv) {
         IOServiceClose(c); return result;
     }
     signal(SIGINT, onSignal); signal(SIGTERM, onSignal);
+    ItlAwdlStatusResponse initial = {};
+    r = readValue(c, ItlAwdlStatus, initial);
+    if (r) { fprintf(stderr, "Initial status: 0x%x\n", r); IOServiceClose(c); return 1; }
     r = IOConnectCallStructMethod(c, ItlAwdlBeginData, &b, sizeof(b), nullptr, nullptr);
     if (r) { fprintf(stderr, "Begin data RX: 0x%x\n", r); IOServiceClose(c); return 1; }
     if (die) { puts("{\"client_death_test\":true}"); fflush(stdout); _exit(0); }
@@ -112,8 +116,8 @@ int main(int argc, char **argv) {
         IOServiceClose(other);
     }
     using Clock = std::chrono::steady_clock;
-    auto deadline = Clock::now() + std::chrono::milliseconds(b.dwell_ms + (expire ? 1000 : 0));
-    unsigned received = 0;
+    auto deadline = Clock::now() + std::chrono::milliseconds(closeEarly ? b.dwell_ms / 2 : b.dwell_ms + (expire ? 1000 : 0));
+    unsigned received = 0, checksummed = 0, checksumFailed = 0, checksumUnavailable = 0;
     while (!interrupted && Clock::now() < deadline && !checks.failed) {
         ItlAwdlDataResponse p = {};
         r = readValue(c, ItlAwdlReadData, p);
@@ -123,6 +127,10 @@ int main(int argc, char **argv) {
                 checks.expect("RX contract", kIOReturnBadArgument, kIOReturnSuccess); break;
             }
             ++received;
+            auto checksum = ItlAwdl::dataChecksum(p.ipv6, p.length);
+            if (checksum == ItlAwdl::DataChecksum::Valid) ++checksummed;
+            else if (checksum == ItlAwdl::DataChecksum::Invalid) ++checksumFailed;
+            else ++checksumUnavailable;
             printf("{\"ipv6_rx\":true,\"length\":%u,\"sequence\":%u,\"channel\":%u,\"next_header\":%u,\"rssi\":%d}\n",
                    p.length, p.sequence, p.channel, p.ipv6[6], p.rssi_dbm);
         } else if (r != kIOReturnNotReady) { checks.expect("read", r, kIOReturnNotReady); break; }
@@ -138,14 +146,24 @@ int main(int argc, char **argv) {
         checks.expect("timeout is idle", before.session, ItlAwdlIdle);
         checks.expect("timeout reason", before.stop_reason, ItlAwdlExpired);
     }
+    if (closeEarly && !interrupted) checks.expect("explicit close before timeout", before.session, ItlAwdlListening);
     checks.expect("end", IOConnectCallStructMethod(c, ItlAwdlEnd, nullptr, 0, nullptr, nullptr), kIOReturnSuccess);
     ItlAwdlDataStatusResponse after = {};
     checks.expect("closed status", readValue(c, ItlAwdlDataStatus, after), kIOReturnSuccess);
     checks.expect("closed queue wiped", after.queued | after.enabled, 0);
     ItlAwdlDataResponse packet = {};
     checks.expect("closed read denied", readValue(c, ItlAwdlReadData, packet), kIOReturnNotPermitted);
+    ItlAwdlStatusResponse restored = {};
+    checks.expect("restored status", readValue(c, ItlAwdlStatus, restored), kIOReturnSuccess);
+    checks.expect("restored idle", restored.session, ItlAwdlIdle);
+    checks.expect("restored opmode", restored.opmode, initial.opmode);
+    checks.expect("restored net state", restored.net_state, initial.net_state);
+    checks.expect("restored interface power", restored.if_flags & 0x41, initial.if_flags & 0x41);
+    if (closeEarly && !interrupted) checks.expect("explicit close reason", restored.stop_reason, ItlAwdlClosed);
     showStatus(c);
     IOServiceClose(c);
-    printf("{\"received\":%u,\"native_airdrop\":false}\n", received);
+    checks.expect("transport checksums", checksumFailed, 0);
+    printf("{\"received\":%u,\"checksums_valid\":%u,\"checksums_failed\":%u,\"checksums_unavailable\":%u,\"native_airdrop\":false}\n",
+           received, checksummed, checksumFailed, checksumUnavailable);
     return checks.report();
 }

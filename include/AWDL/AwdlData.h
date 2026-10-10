@@ -23,6 +23,25 @@ inline bool validIpv6(const uint8_t *p, size_t n) {
     return p && n >= 40 && n <= DataMtu && (p[0] >> 4) == 6 &&
            size_t(be16(p + 4)) == n - 40;
 }
+enum class DataChecksum { Unavailable, Valid, Invalid };
+// Diagnostic integrity check for direct UDP/ICMPv6. Extension headers (in
+// particular IPv6 fragments) require the real network stack, not this helper.
+inline DataChecksum dataChecksum(const uint8_t *p, size_t n) {
+    if (!validIpv6(p, n)) return DataChecksum::Invalid;
+    const uint8_t protocol = p[6];
+    if (protocol != 17 && protocol != 58) return DataChecksum::Unavailable;
+    size_t length = n - 40;
+    if (protocol == 17 && (length < 8 || be16(p + 44) != length || !be16(p + 46)))
+        return DataChecksum::Invalid;
+    if (protocol == 58 && length < 4) return DataChecksum::Invalid;
+    uint32_t sum = uint32_t(length) + protocol;
+    for (size_t i = 8; i < 40; i += 2) sum += be16(p + i);
+    size_t cursor = 40;
+    for (; n - cursor >= 2; cursor += 2) sum += be16(p + cursor);
+    if (cursor < n) sum += uint32_t(p[cursor]) << 8;
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return sum == 0xffff ? DataChecksum::Valid : DataChecksum::Invalid;
+}
 inline DataResult decodeDataPayload(const uint8_t *p, size_t n, DataPacket &out) {
     const uint8_t snap[8] = {0xaa, 0xaa, 3, 0, 0x17, 0xf2, 8, 0};
     if (n < sizeof(snap)) return DataResult::Truncated;

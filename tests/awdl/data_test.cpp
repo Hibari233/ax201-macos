@@ -61,6 +61,28 @@ int main() {
         assert(decodeData(q.data(), q.size(), true, &out) == DataResult::Valid);
     }
     reject(b, true);
+    auto icmp = fixture(8); icmp[46] = 58;
+    const uint8_t echo[8] = {128,0,0x81,0x3b,0,1,0,2};
+    memcpy(icmp.data() + 80, echo, sizeof(echo));
+    assert(dataChecksum(icmp.data() + 40, 48) == DataChecksum::Valid);
+    icmp.back() ^= 1;
+    assert(dataChecksum(icmp.data() + 40, 48) == DataChecksum::Invalid);
+    icmp[46] = 44;
+    assert(dataChecksum(icmp.data() + 40, 48) == DataChecksum::Unavailable);
+    auto udp = fixture(8); udp[46] = 17;
+    const uint8_t datagram[8] = {0x12,0x34,0x56,0x78,0,8,0x98,0xb3};
+    memcpy(udp.data() + 80, datagram, sizeof(datagram));
+    assert(dataChecksum(udp.data() + 40, 48) == DataChecksum::Valid);
+    udp[86] = udp[87] = 0;
+    assert(dataChecksum(udp.data() + 40, 48) == DataChecksum::Invalid);
+    udp[84] = 1;
+    assert(dataChecksum(udp.data() + 40, 48) == DataChecksum::Invalid);
+    auto odd = fixture(9); odd[46] = 17;
+    const uint8_t oddDatagram[9] = {0x12,0x34,0x56,0x78,0,9,0xee,0xb0,0xaa};
+    memcpy(odd.data() + 80, oddDatagram, sizeof(oddDatagram));
+    assert(dataChecksum(odd.data() + 40, 49) == DataChecksum::Valid);
+    odd.back() ^= 1;
+    assert(dataChecksum(odd.data() + 40, 49) == DataChecksum::Invalid);
     auto lng = b;
     lng.erase(lng.begin() + 36, lng.begin() + 38);
     lng.insert(lng.begin() + 36, {3,2,0xaa,0xbb, 21,1,0xee, 3,0});
@@ -107,6 +129,7 @@ int main() {
                 auto &v = out.packets[j];
                 assert(v.ipv6 >= fuzz.data() && v.ipv6 + v.length <= fuzz.data() + fuzz.size());
                 assert(validIpv6(v.ipv6, v.length));
+                (void)dataChecksum(v.ipv6, v.length);
             }
         }
     }

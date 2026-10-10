@@ -6,8 +6,9 @@ derived from [OpenIntelWireless/itlwm](https://github.com/OpenIntelWireless/itlw
 [简体中文](README.zh-CN.md) · [Build](docs/BUILDING.md) · [Roadmap](docs/ROADMAP.md)
 · [Validation](docs/VALIDATION.md) · [Contributing](CONTRIBUTING.md)
 
-The aim is reliable native macOS Wi-Fi on Intel AX201, followed by WPA3 and native
-AirDrop. **This is an experimental project. WPA3-only and AirDrop do not work yet.**
+The aim is reliable native macOS Wi-Fi on Intel AX201, including WPA3 and native
+AirDrop. AirDrop is the current development priority.
+**This is an experimental project. WPA3-only and AirDrop do not work yet.**
 Creating an interface or seeing an AWDL frame is not an AirDrop implementation.
 
 ## Scope and current status
@@ -25,8 +26,9 @@ An Apple Silicon Mac can cross-compile the kext but cannot load this x86_64 driv
 | WPA2/WPA3 transition, optional PMF | Inherited upstream support; not independently validated here |
 | WPA3-SAE-only / mandatory PMF | Unsupported; authentication and key-management work remains |
 | Passive AWDL frame parsing and timing | Offline tests and earlier exclusive-monitor observations; diagnostic only |
+| Passive AWDL IPv6 reception | Revision 10 received owned-peer traffic on channel 149; 108 packets of 1280 bytes passed transport checksums; diagnostic only |
 | AWDL diagnostics while connected to Wi-Fi | Lifecycle/restoration tested; reception from a peer on the same channel still unvalidated |
-| Native `awdl0`, peer IPv6, AirDrop transfer | Not implemented |
+| Native `awdl0`, bidirectional peer IPv6, AirDrop transfer | Not implemented |
 | Sleep/wake, roaming, sustained throughput | Not yet qualified for release |
 | Tahoe and other Intel adapters | Inherited source retained; not part of this fork's initial validation claim |
 

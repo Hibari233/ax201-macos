@@ -32,14 +32,25 @@ sudo awdl_data_rx selftest
 sudo awdl_data_rx status
 sudo awdl_data_rx listen CHANNEL SECONDS OWNED_PEER_MAC
 sudo awdl_data_rx expire CHANNEL SECONDS OWNED_PEER_MAC
+sudo awdl_data_rx close CHANNEL SECONDS OWNED_PEER_MAC
 sudo awdl_data_rx die CHANNEL SECONDS OWNED_PEER_MAC
 ```
 
 Use only your own peer. The caller must restore ordinary Wi-Fi power after the
 test; use an independent Ethernet management connection. `expire` checks kernel
-timeout restoration, and `die` checks client-death cleanup. The client prints
+timeout restoration, `close` ends halfway through the dwell to test explicit
+close, and `die` checks client-death cleanup. The client prints
 packet lengths, sequence numbers and aggregate counters, not addresses/payloads.
 Zero packets is an observation, not evidence of a working data path.
+The client also verifies checksums on direct UDP/ICMPv6 packets. It reports
+extension-header traffic, including fragments, as checksum-unavailable; it does
+not reassemble it or claim transport integrity for those packets.
+
+On the initial development machine, 1280-byte IPv6 reception was verified with
+checksums. A 1500-byte stimulus using normal macOS minimum-MTU behavior arrived
+as 1280/276-byte IPv6 fragments. A separate unfragmented 1500-byte stimulus
+produced zero accepted data records; the cause is undetermined and this size
+remains unqualified. See [validation](VALIDATION.md) for counts and binary identity.
 
 Native delivery still needs peer lifecycle, replay/duplicate handling,
 bidirectional radio scheduling and ACKs, validated native interface/queue
