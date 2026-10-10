@@ -1370,3 +1370,31 @@ MAC1/active-flag checks passed throughout, stop restored MAC0, WPA2 passed
 transmitter entry in 211 observations. No native RX handoff or AirDrop transfer
 was enabled. The next change restores 20 ms sampling and investigates a
 separate firmware P2P-device radio lifecycle before enabling any TX there.
+
+## P2P-device receive lifecycle — 2026-10-11
+
+Source `48cb83d11ef22ecad79e2a776244b6c63088e28b` (revision 50), binary
+`5c438440a7be8af77822395a41942b3fabbf16a1051c08e62e2f42a3a359e24b`, loaded
+UUID `C2D15912-1529-3407-8E4C-BAB3462C3DFB`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38071269832)
+passed all three jobs. Thirteen local C++ suites with UBSan, five Python tests,
+both 560-slot/63-method ABI comparisons, 384 runtime contracts and the full
+baseline passed. Rollback is revision 49.
+
+Selector 32 rejected all 12 malformed requests and refused the active STA.
+Two separate 3-second P2P-device leases used MAC1, firmware command version 1
+and notification version 2. Each received one successful START notification
+and **19 owned-peer AWDL frames**, with zero invalid frames and three ring
+overflow drops. The requested protection durations were 2744/2747 TU after
+radio startup. The second lease observed a normal END notification; the first
+ended through the independent lease timer and full firmware teardown. Neither
+left a requested/active protection or reported a failed/malformed notification.
+No host TX was submitted; autonomous firmware ACKs were not measured.
+
+MAC identity and active-context checks passed for 135/134 samples, and both
+leases restored MAC0. The retained native manager and disabled/unpublished
+interface were unchanged. WPA2 passed 42/42 pings across the baseline, listener
+regression and P2P tests; GPU/display/power checks passed in the same boot.
+This establishes a bounded P2P receive lifecycle on this firmware, not native
+peer discovery or AirDrop. P2P transmission timing remains untested; native
+SYNC, RX handoff and file transfer remain disabled.
