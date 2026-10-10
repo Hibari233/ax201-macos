@@ -1346,3 +1346,27 @@ failure; no second frame was sent.
 WPA2 passed 42/42 pings, the retained manager and boot-session UUID were
 unchanged, and GPU/display/power checks passed. The receiving Mac still had no
 transmitter entry in 211 observations. Native AirDrop remains unavailable.
+
+## Pending GP2 cadence comparison — 2026-10-11
+
+Source `c453fe169e6fda90f934caef36de5142c2e63e10` (revision 49), binary
+`59a7698647762937dcea64041a5faafc6a02f63012095b4fca64e0dc2cd61d76`, loaded
+UUID `8BBAB0C8-876E-3323-B608-C54208015569`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38069914896)
+passed all three jobs. Local checks, both native ABI comparisons, 384 runtime
+contracts and the full baseline passed. Rollback is revision 48.
+
+The pending-frame GP2 interval changed from 20 to 2 ms. Eleven reads occurred;
+the first started 2,805 us after the doorbell, the last at 29,346 us, and the
+longest read took 56 us. The addressed ACK nevertheless arrived **30,042 us**
+after the encoded timestamp and completion at **31,267 us**. The experiment
+did not support the hypothesis that transmission was simply waiting for the
+next 20 ms GP2 access. A single comparison cannot attribute the larger delay
+to the polling change. All 23 MAC-status samples were awake; firmware reported
+success with no retries and 228 us media duration.
+
+MAC1/active-flag checks passed throughout, stop restored MAC0, WPA2 passed
+42/42 pings and GPU/display/power checks passed. The receiving Mac found no
+transmitter entry in 211 observations. No native RX handoff or AirDrop transfer
+was enabled. The next change restores 20 ms sampling and investigates a
+separate firmware P2P-device radio lifecycle before enabling any TX there.
