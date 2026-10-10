@@ -107,6 +107,36 @@ IOReturn ItlAwdlNativeInterface::setAWDL_BSSID(apple80211_awdl_bssid *data) {
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_ID(apple80211_awdl_election_id *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_ELECTION_ID, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 8, "24H32 election-ID request");
+    // The native request word is 32 bits. The 24H32 radio backend stores its
+    // low 16 bits; its getter zero-extends that word. Preserve that behavior,
+    // including zero and all-ones IDs, rather than inventing range rejection.
+    electionId = static_cast<uint16_t>(data->election_id);
+    electionIdValid = true;
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_ID(apple80211_awdl_election_id *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_ELECTION_ID, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !electionIdValid) return finish(kIOReturnNotReady);
+    data->version = 1;
+    data->election_id = electionId;
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -634,6 +664,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {
     syncTemplate = {};
     networkConfiguration = {};
+    electionId = 0;
+    electionIdValid = false;
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -669,6 +701,8 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     resourcesDisposed = true;
     syncTemplate.clear();
     networkConfiguration.clear();
+    electionId = 0;
+    electionIdValid = false;
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -930,6 +964,32 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         !ItlAwdl::equalMac(concrete->networkConfiguration.companion(), ItlAwdl::DefaultCompanionBssid);
     if (bssidFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_ELECTION_ID(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_election_id id = {0xaaaaaaaa, 0xaaaaaaaa};
+    ++out->methods_checked;
+    if (object->getAWDL_ELECTION_ID(&id) != kIOReturnNotReady ||
+        id.version != 0xaaaaaaaa || id.election_id != 0xaaaaaaaa) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_ELECTION_ID(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    bool idFailed = false;
+    const uint32_t electionIds[] = {0U, 0xffffU, 0x12345678U, 0xffffffffU};
+    for (uint32_t value : electionIds) {
+        apple80211_awdl_election_id input = {0, value};
+        idFailed |= object->setAWDL_ELECTION_ID(&input) != kIOReturnSuccess ||
+            input.version != 0 || input.election_id != value;
+        id = {0xaaaaaaaa, 0xaaaaaaaa};
+        idFailed |= object->getAWDL_ELECTION_ID(&id) != kIOReturnSuccess ||
+            id.version != 1 || id.election_id != static_cast<uint16_t>(value);
+    }
+    id = {2, 0};
+    idFailed |= object->setAWDL_ELECTION_ID(&id) != kIOReturnBadArgument;
+    idFailed |= object->getAWDL_ELECTION_ID(&id) != kIOReturnSuccess || id.election_id != 0xffff;
+    id = {1, 0x1234};
+    idFailed |= object->setAWDL_ELECTION_ID(&id) != kIOReturnSuccess;
+    idFailed |= object->getAWDL_ELECTION_ID(&id) != kIOReturnSuccess || id.election_id != 0x1234;
+    if (idFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     uint8_t payload[] = {21, 2, 0, 0x10, 1};
     apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
@@ -971,6 +1031,8 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     concrete->syncTemplate.clear();
     concrete->networkConfiguration.clear();
+    concrete->electionId = 0;
+    concrete->electionIdValid = false;
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

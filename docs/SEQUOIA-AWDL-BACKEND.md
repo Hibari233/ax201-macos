@@ -56,11 +56,12 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 61 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 58 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Two implemented methods instead receive fully sized audited structures:
-the sync-state getter reports disabled, and the template setter stages an owned
-copy and rejects truncation without changing it. Full initialization must open
+bytes. Five implemented methods instead receive fully sized audited structures:
+the sync-enabled getter reports disabled, the template setter stages an owned
+copy, the BSSID setter owns the default pair, and election-ID set/get normalize
+the native 16-bit value. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -235,6 +236,18 @@ The future operational-enable transaction must do that work before reporting
 readiness. The old isolated data diagnostic uses the same standard AWDL
 identifier and is not connected to the native data path. Custom identifiers,
 operational synchronization and AirDrop remain unsupported.
+
+The native election-ID request has an eight-byte extent, with a 32-bit request
+word at offset 4. The inspected 24H32 radio setter stores the low 16 bits and
+its getter zero-extends those bits. The disabled backend now follows that
+behavior, accepting request versions 0/1 after network-identifier configuration.
+Zero, `0xffff`, and inputs with upper bits set are handled explicitly. Invalid
+versions preserve the last value; querying an unset value returns not ready
+without altering the caller's output. This stages an election parameter; it
+does not execute election, select a master or start a radio clock. Live updates
+are rejected while the interface is enabled until the radio scheduler can
+apply them transactionally. Init-only checks exercise the concrete native
+virtual calls and verify normalized reads and failure-state preservation.
 
 ## Native packet prototype
 
@@ -566,9 +579,9 @@ backend may infer the semantics of the opaque bytes from their existence.
 
 ## Software fallback is selective
 
-The peer-manager getters for sync parameters and sync state compare a backend
+The peer-manager getters for sync parameters, sync state and election ID compare a backend
 result against `kIOReturnUnsupported` (`0xe00002c7`) and then use software-held
-state. This is a verified fallback for those two requests, not permission to
+state. This is a verified fallback for those requests, not permission to
 return success for unimplemented firmware operations, and not proof that all
 63 backend methods may be unsupported. Some Broadcom methods return BSD error
 values; changing return conventions globally would lose these specific native

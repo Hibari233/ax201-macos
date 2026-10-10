@@ -594,3 +594,33 @@ address worked. This was not a machine hang or evidence of AWDL discovery.
 There was no RF synchronization, native RX handoff, discovery or file transfer.
 Subsequent network-identifier staging code still requires its own hardware
 qualification; the revision 23 failure must not be reported as that fix passing.
+
+## Native network identifier accepted — 2026-10-10
+
+Source `eef1c2723f7ac3e4753bddad50d67abc7397848e` (revision 24):
+
+- Binary SHA-256: `64476676726aa8c9b4389c61d639d3174b1c30c91640e08aa61bd199f0160827`
+- Loaded UUID: `42671D1C-7E42-30E2-AD65-4CB2A4E1820E`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38046919651)
+  passed all three jobs. Local UBSan and the 560-slot / 63-method concrete
+  interface comparison passed. The external EFI transaction retained a
+  verified revision 23 backup and preserved the existing config.
+
+The 384 init-only checks passed with zero failures or remaining instances,
+including version/address validation, owned BSSID bytes and their use in the
+encoded synchronization frame. All seven malformed configuration checks and
+the missing-session rejection passed again.
+
+The single native configuration call advanced through `setAWDL_BSSID` with a
+zero return. It next queried `getPEER_CACHE_MAXIMUM_SIZE`, which returned
+unsupported; native code continued using its fallback. The following
+`setAWDL_ELECTION_ID` returned unsupported and was the fatal result returned by
+configure. The three-call trace was preserved across two reopened-client run
+requests without further backend calls or another manager creation.
+
+The interface remained unpublished and disabled, with no enabled queues.
+WPA2 interface-bound router pings passed 12/12 and post-test GPU/display/power
+health assertions passed. Native configuration is still incomplete. BSSID
+acceptance and CPU frame encoding establish neither firmware filter setup nor
+any RF transmission, peer discovery or AirDrop transfer. Later election-ID
+implementation is not covered by this revision's hardware result.

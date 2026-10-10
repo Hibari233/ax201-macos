@@ -80,6 +80,8 @@ private:
     ItlAwdlNativeConfigureResponse configurationResult;
     ItlAwdl::ActionTemplate syncTemplate;
     ItlAwdl::NativeBssidConfiguration networkConfiguration;
+    uint16_t electionId;
+    bool electionIdValid;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;

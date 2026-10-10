@@ -52,6 +52,8 @@ static_assert(__is_same(decltype(static_cast<IOSkywalkPacket *>(nullptr)->prepar
 // independently. These would catch the old 20-byte/8-byte legacy declarations.
 static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "Sequoia sync params length");
 static_assert(sizeof(apple80211_awdl_bssid) == 16, "Sequoia BSSID pair length");
+static_assert(sizeof(apple80211_awdl_election_id) == 8, "Sequoia election-ID length");
+static_assert(__offsetof(apple80211_awdl_election_id, election_id) == 4, "Sequoia election-ID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");
 static_assert(__offsetof(apple80211_awdl_sync_params, unknown_14) == 0x14, "Sequoia sync params tail");
