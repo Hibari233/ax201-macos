@@ -96,17 +96,64 @@ peer election, concurrent STA + AWDL operation, native interface integration or
 AirDrop file transfer. Later source builds do not inherit this exact binary's
 hardware observations automatically.
 
+## Revision 11 bounded transmit validation (2026-10-10)
+
+The same AX201 / Sequoia 24H32 machine booted revision 11 build 1 from
+`0313b9ec857dd71787e07d7be2b876144ca651bd`:
+
+- Kext binary SHA-256: `a4b4828b853136007465867eb4101014f607d466b99514ac60a9b6416e183721`
+- Loaded UUID: `AD0F730C-68F9-3C28-BFC4-302DE2870451`
+- Revision 10 was backed up before the guarded EFI switch; EFI configuration,
+  graphics and power settings were retained.
+- Local UBSan, Intel macOS ASan+UBSan, and all three
+  [CI jobs for this commit](https://github.com/Hibari233/ax201-macos/actions/runs/38028557020)
+  passed. Offline echo tests include an independently calculated odd-length
+  checksum fixture, 64/65/1280/1499/1500-byte cases, reply identity/integrity,
+  truncation, bounds and exact in-place encapsulation.
+
+Each TX test selected the same owned Mac, used exclusive monitor mode and
+automatically restored Wi-Fi power afterwards. These are **diagnostic frames**;
+the sender has no negotiated AWDL peer session or native network interface.
+
+| Test | Submitted | Firmware success / failure | Valid echo replies |
+| --- | ---: | ---: | ---: |
+| Channel 6, 64 bytes, periodic host trigger | 8 | 3 / 5 | 0 |
+| Channel 6, 64 bytes, trigger after peer RX | 8 | 3 / 5 | 0 |
+| Channel 6, 1280 bytes, trigger after peer RX | 8 | 1 / 7 | 0 |
+| Channel 6, 1500 bytes, trigger after peer RX | 8 | 2 / 6 | 0 |
+| Channel 149, restricted by firmware policy | 0 | 0 / 0; 74 calls denied | 0 |
+
+The RX-trigger variant changes the host client, not the installed kext. The
+final failure status in the channel-6 runs was `0x83` (long retry limit).
+Triggering on peer reception did not establish bidirectional IPv6. Firmware
+success is **not** evidence of a received/accepted IPv6 packet, working peer
+negotiation, a native AirDrop service, or reliable MTU-1500 delivery.
+
+Every run passed 33 existing ABI checks, 18 data ABI checks and 23 active
+TX/lifecycle/accounting checks. All pending TX counts were zero after cleanup.
+A subsequent channel-149 RX regression received **156 packets of 1280 bytes**;
+all transport checksums passed, with zero malformed/unsupported/dropped records
+and 20 active RX/lifecycle checks passed. Counts may include radio duplicates.
+Final WPA2 reconnection and 10/10 router pings were verified on the Wi-Fi route.
+Display health and its 240 Hz mode remained intact. True system sleep was not
+tested; a six-hour awake assertion was used for development.
+
+The later [native backend audit](SEQUOIA-AWDL-BACKEND.md) corrected two request
+extents and compiled successfully. That audit is not runtime native-interface
+validation and is not part of this exact installed binary's evidence.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Revision 10 build 1 identity verified above; release matrix remains incomplete |
+| Fresh public-fork binary boot and loaded-hash verification | Revisions 10 and 11 identities verified above; release matrix remains incomplete |
 | WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 10/10 final Wi-Fi pings; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
 | WPA3-only with mandatory PMF, wrong password, rekey | Unsupported / pending implementation |
 | Peer AWDL RX while STA stays associated on the same channel | Pending |
 | Exclusive AWDL IPv6 RX | Bounded 1280-byte reception/checksums verified; unfragmented 1500-byte case unresolved |
+| Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |

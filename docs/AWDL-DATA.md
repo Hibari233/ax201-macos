@@ -42,6 +42,9 @@ link-quality table. Host submission, firmware completion and validated echo
 reply are separate results. The client validates reply addresses, ICMP type,
 run token, sequence, every payload byte and transport checksum, then removes
 duplicate replies. Firmware success alone does not establish peer IPv6 or AirDrop.
+The current client triggers after reception from the selected peer, rather than
+an unrelated periodic host tick. This reduces one source of host delay but is
+not negotiated AWDL scheduling; initial hardware tests still received no replies.
 
 Build clients with `python3 scripts/build_awdlctl.py`. On a dedicated test
 machine with a verified rollback path, the new client accepts:

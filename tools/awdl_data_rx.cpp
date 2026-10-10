@@ -139,15 +139,6 @@ int main(int argc, char **argv) {
     unsigned sent = 0, echoes = 0, echoed = 0, denied = 0, notReady = 0, busy = 0;
     unsigned received = 0, checksummed = 0, checksumFailed = 0, checksumUnavailable = 0;
     while (!interrupted && Clock::now() < deadline && !checks.failed) {
-        if (probe && sent < 8 && Clock::now() >= nextProbe) {
-            nextProbe = Clock::now() + std::chrono::milliseconds(100);
-            auto result = IOConnectCallStructMethod(c, ItlAwdlDataProbe, &request, sizeof(request), nullptr, nullptr);
-            if (!result) ++sent;
-            else if (result == kIOReturnNotPermitted) ++denied;
-            else if (result == kIOReturnNotReady) ++notReady;
-            else if (result == kIOReturnBusy) ++busy;
-            else checks.expect("fixed data probe", result, kIOReturnSuccess);
-        }
         ItlAwdlDataResponse p = {};
         r = readValue(c, ItlAwdlReadData, p);
         if (!r) {
@@ -174,9 +165,24 @@ int main(int argc, char **argv) {
         } else if (r != kIOReturnNotReady) { checks.expect("read", r, kIOReturnNotReady); break; }
         ItlAwdlFrameResponse action = {};
         // Drain management records; their private contents are not printed.
-        for (unsigned i = 0; i < ITL_AWDL_RING_COUNT; ++i)
+        bool peerHeard = false;
+        for (unsigned i = 0; i < ITL_AWDL_RING_COUNT; ++i) {
             if (readValue(c, ItlAwdlRead, action)) break;
-        if (r == kIOReturnNotReady) usleep(10000);
+            peerHeard = true;
+        }
+        // A peer can leave the channel before a periodic 100 ms host tick.
+        // Trigger immediately after owned-peer reception instead. This still
+        // does not replace negotiated AWDL window scheduling in the driver.
+        if (probe && peerHeard && sent < 8 && Clock::now() >= nextProbe) {
+            nextProbe = Clock::now() + std::chrono::milliseconds(100);
+            auto result = IOConnectCallStructMethod(c, ItlAwdlDataProbe, &request, sizeof(request), nullptr, nullptr);
+            if (!result) ++sent;
+            else if (result == kIOReturnNotPermitted) ++denied;
+            else if (result == kIOReturnNotReady) ++notReady;
+            else if (result == kIOReturnBusy) ++busy;
+            else checks.expect("fixed data probe", result, kIOReturnSuccess);
+        }
+        if (r == kIOReturnNotReady) usleep(probe ? 1000 : 10000);
     }
     ItlAwdlStatusResponse before = {};
     checks.expect("final status", showStatus(c, &before), kIOReturnSuccess);
