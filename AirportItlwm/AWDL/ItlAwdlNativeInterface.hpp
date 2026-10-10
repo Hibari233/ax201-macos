@@ -82,6 +82,8 @@ private:
     ItlAwdl::NativeBssidConfiguration networkConfiguration;
     uint16_t electionId;
     bool electionIdValid;
+    uint16_t masterChannel;
+    bool masterChannelValid;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;

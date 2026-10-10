@@ -137,6 +137,48 @@ IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_ID(apple80211_awdl_election_id
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_MASTER_CHANNEL(apple80211_awdl_master_channel *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_MASTER_CHANNEL, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 8, "24H32 master-channel request");
+    const auto channel = data->master_channel;
+    // Native 24H32 ignores zero instead of clearing the previous channel.
+    if (!channel) return finish(kIOReturnSuccess);
+    if (channel > IEEE80211_CHAN_MAX || !ItlAwdl::nativeActionChannelFlags(channel))
+        return finish(kIOReturnBadArgument);
+    auto parent = OSDynamicCast(AirportItlwm, controller);
+    auto radio = parent ? OSDynamicCast(ItlIwx, parent->fHalService) : nullptr;
+    auto gate = radio ? radio->getMainCommandGate() : nullptr;
+    if (!gate || gate->getWorkLoop() != loop) return finish(kIOReturnNotReady);
+    auto ic = radio->get80211Controller();
+    if (!ic || !isset(ic->ic_chan_active, channel) || !ic->ic_channels[channel].ic_freq)
+        return finish(kIOReturnUnsupported);
+    masterChannel = static_cast<uint16_t>(channel);
+    masterChannelValid = true;
+    setProperty("AX201StagedMasterChannel", masterChannel, 32);
+    // Staging is not retuning or permission to transmit. The future enable /
+    // scheduler path must revalidate the live firmware regulatory TX flags.
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_MASTER_CHANNEL(apple80211_awdl_master_channel *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_MASTER_CHANNEL, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !masterChannelValid) return finish(kIOReturnNotReady);
+    data->version = 1;
+    data->master_channel = masterChannel;
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -201,7 +243,8 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     const ItlAwdl::SyncActionParameters &parameters, uint8_t *output, size_t capacity) {
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
-        resourcesDisposed || isInactive() || !syncTemplate.length()) return 0;
+        resourcesDisposed || isInactive() || !syncTemplate.length() ||
+        !electionIdValid || !masterChannelValid || parameters.masterChannel != masterChannel) return 0;
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
@@ -666,6 +709,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     networkConfiguration = {};
     electionId = 0;
     electionIdValid = false;
+    masterChannel = 0;
+    masterChannelValid = false;
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -703,6 +748,9 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     networkConfiguration.clear();
     electionId = 0;
     electionIdValid = false;
+    masterChannel = 0;
+    masterChannelValid = false;
+    removeProperty("AX201StagedMasterChannel");
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -990,6 +1038,34 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     idFailed |= object->getAWDL_ELECTION_ID(&id) != kIOReturnSuccess || id.election_id != 0x1234;
     if (idFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_MASTER_CHANNEL(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_master_channel master = {0xaaaaaaaa, 0xaaaaaaaa};
+    ++out->methods_checked;
+    if (object->getAWDL_MASTER_CHANNEL(&master) != kIOReturnNotReady ||
+        master.version != 0xaaaaaaaa || master.master_channel != 0xaaaaaaaa) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_MASTER_CHANNEL(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    master = {0, 0};
+    bool masterFailed = object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnSuccess ||
+        concrete->masterChannelValid || object->getAWDL_MASTER_CHANNEL(&master) != kIOReturnNotReady;
+    master = {0, 6}; // Present on this AX201's normal 2.4 GHz channel map.
+    masterFailed |= object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnSuccess;
+    master = {0xaaaaaaaa, 0xaaaaaaaa};
+    masterFailed |= object->getAWDL_MASTER_CHANNEL(&master) != kIOReturnSuccess ||
+        master.version != 1 || master.master_channel != 6;
+    master = {1, 0};
+    masterFailed |= object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnSuccess;
+    master = {2, 6};
+    masterFailed |= object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnBadArgument;
+    master = {0, 15};
+    masterFailed |= object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnBadArgument;
+    master = {0, UINT32_MAX};
+    masterFailed |= object->setAWDL_MASTER_CHANNEL(&master) != kIOReturnBadArgument;
+    masterFailed |= object->getAWDL_MASTER_CHANNEL(&master) != kIOReturnSuccess ||
+        master.version != 1 || master.master_channel != 6;
+    if (masterFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     uint8_t payload[] = {21, 2, 0, 0x10, 1};
     apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
@@ -1029,10 +1105,17 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     context.clockValid = false;
     frame[0] = 0x5a;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    context.clockValid = true;
+    parameters.masterChannel = 149; // A caller cannot override the staged channel.
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    parameters.masterChannel = 6;
     concrete->syncTemplate.clear();
     concrete->networkConfiguration.clear();
     concrete->electionId = 0;
     concrete->electionIdValid = false;
+    concrete->masterChannel = 0;
+    concrete->masterChannelValid = false;
+    concrete->removeProperty("AX201StagedMasterChannel");
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

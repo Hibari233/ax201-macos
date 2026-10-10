@@ -56,12 +56,13 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 58 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 56 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Five implemented methods instead receive fully sized audited structures:
+bytes. Seven implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
-the native 16-bit value. Invalid updates preserve staged state. Full initialization must open
+the native 16-bit value. Master-channel set/get stage a channel from the radio's
+active map. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -248,6 +249,22 @@ does not execute election, select a master or start a radio clock. Live updates
 are rejected while the interface is enabled until the radio scheduler can
 apply them transactionally. Init-only checks exercise the concrete native
 virtual calls and verify normalized reads and failure-state preservation.
+
+Master-channel requests are eight bytes with a 32-bit channel at offset 4.
+The disabled setter accepts versions 0/1 only after network configuration.
+As in the inspected 24H32 backend, channel zero is a successful no-op: it does
+not clear a previously selected channel. Nonzero selections must fit a known
+channel encoding and exist in this radio's active channel map. The getter
+returns version 1 and the staged channel, or not ready without changing output
+when no channel has been selected. The diagnostic registry property
+`AX201StagedMasterChannel` records a selection without exposing device identity.
+
+Synchronization-frame encoding now requires staged election and channel state;
+its caller cannot override the selected master channel. Init-only contracts
+exercise zero, unset readback, valid selection, malformed updates and channel
+mismatch rejection. Staging does not retune the radio. Operational enable and
+each future transmit schedule must independently revalidate firmware regulatory
+flags and timing before any frame is submitted.
 
 ## Native packet prototype
 

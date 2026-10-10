@@ -624,3 +624,31 @@ health assertions passed. Native configuration is still incomplete. BSSID
 acceptance and CPU frame encoding establish neither firmware filter setup nor
 any RF transmission, peer discovery or AirDrop transfer. Later election-ID
 implementation is not covered by this revision's hardware result.
+
+## Native election identifier accepted — 2026-10-10
+
+Source `d1df2dab40197928bb745f45374fed0794aae528` (revision 25):
+
+- Binary SHA-256: `38b3fec4b2f706a0b711f339051c1a7e13e7d812ef8a34d6b1a1670e29df51f7`
+- Loaded UUID: `5F2F7D05-CD4F-36EE-A404-8FC563AD538C`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38047565050)
+  passed all three jobs. The concrete 560-slot / 63-method comparison passed.
+  Installation retained a verified revision 24 backup and unchanged EFI config.
+
+The 384 init-only checks passed with zero failures or remaining instances.
+These include native election-ID normalization to 16 bits, invalid-version
+preservation and unchanged-output rejection of unset readback. Seven malformed
+configuration requests and the missing-session rejection passed.
+
+One native configuration call accepted the BSSID and election ID. The cache
+size query and election-metric setter returned unsupported; native code
+continued past both. The following master-channel setter returned unsupported
+and ended configuration. Two repeated requests returned the same five-entry
+trace and retained registry identity without new backend calls. The single
+peer manager remains retained, with no BSD publication or enabled queues.
+
+WPA2 interface-bound router pings passed 12/12. The existing GPU/display/power
+health assertions passed after the checks. Election-ID acceptance is disabled
+configuration only: no master was elected, no RF synchronization or native
+packet handoff occurred, and no discovery or file transfer was tested.
+Subsequent master-channel changes require separate hardware qualification.
