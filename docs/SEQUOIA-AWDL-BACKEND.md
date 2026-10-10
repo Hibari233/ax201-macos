@@ -56,15 +56,16 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 49 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 47 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Fourteen implemented methods instead receive fully sized audited structures:
+bytes. Sixteen implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
 the native 16-bit value. Master-channel set/get stage a channel from the radio's
 active map; election-RSSI set/get normalize four signed bytes. The sync-state
 setter owns a disabled role descriptor; presence and extension getters/setters
-retain the associated timing parameters. Invalid updates preserve staged state. Full initialization must open
+retain the associated timing parameters. Channel-sequence set/get own and
+validate the qualified basic plan. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -324,10 +325,23 @@ agree on this layout; the four trailing bytes at offset 396 remain opaque.
 The conditional declaration and compile fixture now match these boundaries.
 
 The native encoding selector accepts 0/1; it is not the wire TLV encoding.
-Native value 1 selects a separate firmware encoding and bandwidth policy.
-Consequently both sequence backends remain unsupported until a bounded
-translation, channel-map validation and owned-plan encoder binding are
-implemented. Correcting the layout does not itself enable channel hopping.
+Native value 1 selects a separate firmware encoding and bandwidth policy and
+remains unsupported. The sequence set/get backends now own the audited native
+encoding-0 subset: 16 slots, a power-of-two step of 1..16 AWs, no duplicate or
+fill substitution, and unbonded 2.4/5 GHz records. Zero channels mean unavailable
+slots. Nonzero channels must have consistent band flags and belong to the
+radio's active channel map; this is still not permission to transmit.
+
+Versions 0/1 are accepted. Canonical readback uses version 1, zero unused records
+and padding, and retains no producer pointers. Unknown tail bytes and alternate
+command flags remain unsupported. Rejected updates preserve the entire previous
+request and plan. The synchronization encoder requires exact agreement with
+the stored plan, so a caller cannot advertise a different schedule. Portable
+tests cover every short request extent, bad final records, ownership, reset,
+unused-record handling and independent native-record-to-wire positions.
+Hardware contracts also check virtual set/get dispatch and frame rejection for
+a mismatched or absent plan. Firmware hopping and synchronization enable remain
+unimplemented; the installed revision 29 result predates this implementation.
 
 ## Native packet prototype
 

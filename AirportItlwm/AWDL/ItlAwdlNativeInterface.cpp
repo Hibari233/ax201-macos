@@ -279,6 +279,51 @@ IOReturn ItlAwdlNativeInterface::getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(appl
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == ItlAwdl::NativeChannelSequence::RequestLength, "24H32 channel request");
+    ItlAwdl::NativeChannelSequence next;
+    const auto result = next.replace(reinterpret_cast<const uint8_t *>(data), sizeof(*data));
+    if (result == ItlAwdl::NativeChannelResult::Invalid) return finish(kIOReturnBadArgument);
+    if (result == ItlAwdl::NativeChannelResult::Unsupported) return finish(kIOReturnUnsupported);
+    auto parent = OSDynamicCast(AirportItlwm, controller);
+    auto radio = parent ? OSDynamicCast(ItlIwx, parent->fHalService) : nullptr;
+    auto gate = radio ? radio->getMainCommandGate() : nullptr;
+    if (!gate || gate->getWorkLoop() != loop) return finish(kIOReturnNotReady);
+    auto ic = radio->get80211Controller();
+    if (!ic) return finish(kIOReturnNotReady);
+    for (auto channel : next.plan().channels)
+        if (channel && (channel > IEEE80211_CHAN_MAX || !isset(ic->ic_chan_active, channel) ||
+            !ic->ic_channels[channel].ic_freq)) return finish(kIOReturnUnsupported);
+    channelSequence = next;
+    auto property = OSData::withBytes(channelSequence.plan().channels, ItlAwdl::ScheduleLength);
+    if (property) {
+        setProperty("AX201StagedChannelSequence", property);
+        property->release();
+    }
+    setProperty("AX201StagedChannelStep", channelSequence.plan().step_aw, 32);
+    // This owns an encoding-0 plan only. Enabling/hopping must separately
+    // revalidate firmware regulatory flags and apply the complete plan.
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !channelSequence.ready()) return finish(kIOReturnNotReady);
+    return finish(channelSequence.copyRequest(reinterpret_cast<uint8_t *>(data), sizeof(*data)) ?
+        kIOReturnSuccess : kIOReturnError);
+}
+
 IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) {
     const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_STATE, r); };
     if (!data) return finish(kIOReturnBadArgument);
@@ -381,7 +426,8 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
         parameters.minExtension != extensionCounts[0] ||
         parameters.maxMulticastExtension != extensionCounts[1] ||
         parameters.maxUnicastExtension != extensionCounts[2] ||
-        parameters.maxActionExtension != extensionCounts[3]) return 0;
+        parameters.maxActionExtension != extensionCounts[3] || !channelSequence.ready() ||
+        !ItlAwdl::equalChannelPlan(parameters.plan, channelSequence.plan())) return 0;
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
@@ -856,6 +902,7 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     presenceModeValid = false;
     bzero(extensionCounts, sizeof(extensionCounts));
     extensionCountsValid = false;
+    channelSequence = {};
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -907,6 +954,9 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     extensionCountsValid = false;
     removeProperty("AX201StagedPresenceMode");
     removeProperty("AX201StagedExtensionCounts");
+    channelSequence.clear();
+    removeProperty("AX201StagedChannelSequence");
+    removeProperty("AX201StagedChannelStep");
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -1298,6 +1348,41 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     extFailed |= object->setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnSuccess;
     if (extFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_sync_channel_sequence channels;
+    memset(&channels, 0xa5, sizeof(channels));
+    auto untouchedChannels = channels;
+    ++out->methods_checked;
+    if (object->getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnNotReady ||
+        memcmp(&channels, &untouchedChannels, sizeof(channels))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    channels = {};
+    channels.length = 16;
+    channels.step_count = 3;
+    channels.fill_channel = 0xff;
+    for (unsigned i = 0; i < channels.length; ++i) channels.channels[i] = {0, 6, 8};
+    bool channelsFailed = object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnSuccess;
+    channels.channels[0].channel = 1; // The producer cannot change saved state.
+    channelsFailed |= concrete->channelSequence.plan().channels[0] != 6;
+    memset(&channels, 0xa5, sizeof(channels));
+    channelsFailed |= object->getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnSuccess ||
+        channels.version != 1 || channels.channels[0].version != 1 || channels.channels[0].channel != 6 ||
+        channels.length != 16 || channels.step_count != 3 || channels.fill_channel != 0xff;
+    auto savedChannels = channels;
+    channels.encoding = 1;
+    channelsFailed |= object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnUnsupported;
+    channels = savedChannels;
+    channels.channels[15].channel = 15; // No partial update on a bad final record.
+    channelsFailed |= object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnBadArgument;
+    channels = savedChannels;
+    channels.version = 2;
+    channelsFailed |= object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnBadArgument;
+    channelsFailed |= object->getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&channels) != kIOReturnSuccess ||
+        memcmp(&channels, &savedChannels, sizeof(channels));
+    if (channelsFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_STATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     ++out->methods_checked;
     apple80211_awdl_sync_state role = {};
@@ -1387,6 +1472,12 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     parameters.minExtension = 1;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     parameters.minExtension = 0;
+    parameters.plan.channels[15] = 1;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    parameters.plan.channels[15] = 6;
+    concrete->channelSequence.clear();
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    failed |= object->setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(&savedChannels) != kIOReturnSuccess;
     role = savedRole;
     role.operation_mode = 0;
     failed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
@@ -1409,6 +1500,9 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     concrete->extensionCountsValid = false;
     concrete->removeProperty("AX201StagedPresenceMode");
     concrete->removeProperty("AX201StagedExtensionCounts");
+    concrete->channelSequence.clear();
+    concrete->removeProperty("AX201StagedChannelSequence");
+    concrete->removeProperty("AX201StagedChannelStep");
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

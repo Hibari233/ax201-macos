@@ -6,6 +6,7 @@
 #include <AWDL/AwdlNativeMetadata.h>
 #include <AWDL/AwdlActionTemplate.h>
 #include <AWDL/AwdlSyncAction.h>
+#include <AWDL/AwdlNativeChannelSequence.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -92,6 +93,7 @@ private:
     bool presenceModeValid;
     uint8_t extensionCounts[4]; // minimum, multicast, unicast, action
     bool extensionCountsValid;
+    ItlAwdl::NativeChannelSequence channelSequence;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;
