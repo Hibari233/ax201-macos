@@ -400,3 +400,55 @@ rejection means the caller retained packet ownership; no packet was delivered
 to BSD, a radio, or a peer. This does not qualify enabled queue callbacks,
 registration error recovery, sustained operation, channel coexistence, native
 discovery or AirDrop transfers.
+
+## Retained native queue registration — 2026-10-10
+
+Source `bfb7ee5293b2b09673ed9ee9e8586a63cc3f040b` (revision 17) was built
+from a clean checkout and loaded on the same AX201 / Sequoia 15.8.1 (24H32):
+
+- Binary SHA-256: `7402a4041c4e3ce87e58d8120168d9cb9166e185dac8bfa8c00bef4bc92f76af`
+- Loaded UUID: `E43F8D11-792B-3074-847D-8A0DF86C6436`
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38040153513)
+  passed all three jobs: Linux ASan/UBSan, Sequoia Wi-Fi, and Sequoia AWDL
+  (79 sources), including the ABI fixture and six diagnostic clients.
+- Local UBSan passed. The actual native interface matched 560 virtual slots
+  with its new BSD-prefix override accounted for; actual queue subclasses
+  matched 189 slots. The compile-only interface fixture also matched 560 slots.
+
+One native interface/peer manager was retained throughout six setup-stage
+exits and three complete prepare/clear cycles. An additional final preparation
+was retired with the interface. This made **10 preparations and five successful
+native registrations**. Four registrations were explicitly deregistered; the
+last was cleaned by the interface's stop path. Every cleanup left owned pools,
+packets and queues at zero. Final retirement also left the native interface and
+peer-manager counts at zero.
+
+While retained, each registration had one pool, one TX queue, one RX queue,
+5,824 native packet objects, two matching registration copies, and both queue
+associations pointing to the same interface. Three repeated prepare calls and
+three repeated clear calls were idempotent. Independent client connections,
+including repeated session-create calls, kept the same interface identity.
+The retained state also survived a two-second gap in each normal cycle.
+No queue callback ran and no cleanup error was reported.
+
+Nine malformed requests were rejected. Prepare without a session, and prepare
+after retirement, returned `kIOReturnNotReady`. Attempting to recreate the
+native peer after retirement returned `kIOReturnNotPermitted`. A non-root
+user-client open was denied. After retirement, the earlier disabled-queue
+regression passed one attempt: 16 packet leases returned with all 12,624
+payload bytes preserved, showing its diagnostic exclusion had been released.
+
+WPA2 connectivity checks passed **21/21 interface-bound router pings** during
+the test. No new panic report appeared. Health checks passed at 1920×1080,
+240 Hz with unchanged GPU/display hashes and zero GPU I/O failures or flip-latch
+timeouts. These are configuration/counter checks, not a new visual confirmation.
+Temporary sleep prevention remained active. The immediately previous revision
+16b driver is preserved in the verified rollback directory.
+
+This qualification covers **unpublished, disabled registration**. No BSD
+interface, real ring, queue callback, radio packet or native AirDrop session
+was activated. Setup exits are not native allocator-failure injections. Native
+low-memory paths, reporting-service lock ordering, live BSD shutdown, enabled
+transport, peer scheduling/discovery and bidirectional file transfers remain
+unqualified. The boot latch is consumed and the test object is retired; a
+new native peer requires reboot, while normal queue reuse did not.
