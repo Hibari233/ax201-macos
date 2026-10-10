@@ -1142,3 +1142,27 @@ and one-pending limits, five-second maximum lease, 100 ms observation deadline,
 original 5 ms qualification, native TLVs, compatibility flags and 12 Mbps rate
 are unchanged. Firmware success for broadcast has no receiver-ACK implication.
 Native enablement, RX handoff and operational AirDrop remain disabled.
+
+
+## Native activation rejection trace
+
+Root-only selector 36 / capability bit 33554432 adds
+`activation-preflight-selftest` and `activation-preflight status|run`. This
+records one call to the exported 24H32 native `enableAWDL()` method after the
+retained manager's configuration, timing and template steps. The radio must be
+idle with STA power off, and no BSD interface or transport may be published.
+The P2P supervisor is checked through its exported accessor and native class
+identity before the call; no private state is written.
+
+The driver's `setAWDL_SYNC_ENABLED` remains an Unsupported backend. The
+inspected native function returns on that rejection before marking the manager
+enabled. Its earlier host configuration requests are recorded individually in
+the existing bounded trace; a zero top-level return may also mean an earlier
+native no-op and is not evidence of activation. This diagnostic does not
+implement synchronization, native RX handoff or AirDrop.
+
+The attempt is cached on the one retained manager and never repeated in the
+same boot. Native enable preparation can change election state and templates,
+so any later radio qualification is refused until reboot. Run this last in a
+boot's validation sequence and restore ordinary Wi-Fi afterward. The native
+manager must still never be retired and recreated within that boot.

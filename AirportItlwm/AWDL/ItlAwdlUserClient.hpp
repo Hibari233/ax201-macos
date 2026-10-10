@@ -40,6 +40,7 @@ private:
     static IOReturn nativePackets(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeBSD(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeConfigure(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeActivationPreflight(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTemplate(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTiming(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeRadio(OSObject *, void *, IOExternalMethodArguments *);

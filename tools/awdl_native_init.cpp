@@ -188,16 +188,16 @@ static int sessionRun(io_connect_t client, uint32_t operation) {
 }
 
 static kern_return_t configureInvoke(io_connect_t client, const ItlAwdlNativeConfigureRequest &r,
-    ItlAwdlNativeConfigureResponse &out, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
+    ItlAwdlNativeConfigureResponse &out, uint32_t method, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
     size_t size = sizeof(ItlAwdlNativeConfigureResponse)) {
     memset(&out, 0, sizeof(out));
-    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeConfigure, &r, in, &out, &size);
+    auto result = IOConnectCallStructMethod(client, method, &r, in, &out, &size);
     if (!result && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION ||
         out.trace_count > ITL_AWDL_CONFIGURE_TRACE_COUNT)) return kIOReturnBadArgument;
     return result;
 }
 
-static int configureInvalidRequests(io_connect_t client) {
+static int configureInvalidRequests(io_connect_t client, uint32_t method = ItlAwdlNativeConfigure) {
     unsigned passed = 0, failed = 0;
     auto check = [&](const char *name, kern_return_t got) {
         if (got == kIOReturnBadArgument) ++passed;
@@ -205,14 +205,14 @@ static int configureInvalidRequests(io_connect_t client) {
     };
     ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, ItlAwdlConfigureInspect, {0, 0}};
     ItlAwdlNativeConfigureResponse out = {};
-    check("short input", configureInvoke(client, r, out, sizeof(r)-1));
-    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeConfigure,
+    check("short input", configureInvoke(client, r, out, method, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, method,
         &out, sizeof(out), nullptr, nullptr));
-    check("short output", configureInvoke(client, r, out, sizeof(r), sizeof(out)-1));
-    r.version = 0; check("version", configureInvoke(client, r, out)); r.version = 1;
-    r.operation = 2; check("operation", configureInvoke(client, r, out)); r.operation = 0;
-    r.reserved[0] = 1; check("reserved0", configureInvoke(client, r, out)); r.reserved[0] = 0;
-    r.reserved[1] = 1; check("reserved1", configureInvoke(client, r, out));
+    check("short output", configureInvoke(client, r, out, method, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", configureInvoke(client, r, out, method)); r.version = 1;
+    r.operation = 2; check("operation", configureInvoke(client, r, out, method)); r.operation = 0;
+    r.reserved[0] = 1; check("reserved0", configureInvoke(client, r, out, method)); r.reserved[0] = 0;
+    r.reserved[1] = 1; check("reserved1", configureInvoke(client, r, out, method));
     printf("{\"invalid_configure_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
     return failed ? 1 : 0;
 }
@@ -246,10 +246,10 @@ static bool printNativeCall(const ItlAwdlNativeConfigureResponse &out) {
     return valid;
 }
 
-static int configureRun(io_connect_t client, uint32_t operation) {
+static int configureRun(io_connect_t client, uint32_t operation, uint32_t method = ItlAwdlNativeConfigure) {
     ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
     ItlAwdlNativeConfigureResponse out = {};
-    auto result = configureInvoke(client, r, out);
+    auto result = configureInvoke(client, r, out, method);
     if (result) { fprintf(stderr, "Native configure request: 0x%x\n", result); return 1; }
     const bool valid = printNativeCall(out);
     printf("\n");
@@ -498,9 +498,11 @@ int main(int argc, char **argv) {
     const bool seriesRequest = argc == 4 && !strcmp(argv[1], "p2p-tx-series");
     const bool psfSeriesSelftest = argc == 2 && !strcmp(argv[1], "p2p-psf-series-selftest");
     const bool psfSeriesRequest = argc == 4 && !strcmp(argv[1], "p2p-psf-series");
+    const bool activationSelftest = argc == 2 && !strcmp(argv[1], "activation-preflight-selftest");
+    const bool activationRequest = argc == 3 && !strcmp(argv[1], "activation-preflight");
     ItlAwdlBeginRequest radioInput = {ITL_AWDL_ABI_VERSION,0,0,0,{},{}};
     uint32_t configureOperation = ItlAwdlConfigureInspect;
-    if (configure || templateRequest || timingRequest) {
+    if (configure || templateRequest || timingRequest || activationRequest) {
         if (!strcmp(argv[2], "run")) configureOperation = ItlAwdlConfigureRun;
         else if (strcmp(argv[2], "status")) configureOperation = 2;
     }
@@ -512,10 +514,10 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !p2pRadioSelftest && !p2pRadioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest && !p2pUnicastSelftest && !p2pUnicastRequest && !seriesSelftest && !seriesRequest && !psfSeriesSelftest && !psfSeriesRequest) ||
+         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !p2pRadioSelftest && !p2pRadioRequest && !syncTxSelftest && !syncTxRequest && !unicastSelftest && !unicastRequest && !p2pUnicastSelftest && !p2pUnicastRequest && !seriesSelftest && !seriesRequest && !psfSeriesSelftest && !psfSeriesRequest && !activationSelftest && !activationRequest) ||
         ((radioRequest || p2pRadioRequest || syncTxRequest || unicastRequest || p2pUnicastRequest || seriesRequest || psfSeriesRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
                          radioInput.dwell_ms < 1000 || radioInput.dwell_ms > 5000)) ||
-        ((configure || templateRequest || timingRequest) && configureOperation > ItlAwdlConfigureRun) ||
+        ((configure || templateRequest || timingRequest || activationRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
@@ -525,6 +527,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
                         "       awdl_native_init session-selftest | session status|create|retire\n"
                         "       awdl_native_init configure-selftest | configure status|run\n"
+                        "       awdl_native_init activation-preflight-selftest | activation-preflight status|run\n"
                         "       awdl_native_init timing-selftest | timing status|run\n"
                         "       awdl_native_init template-selftest | template status|run\n"
                         "       awdl_native_init radio-selftest | radio OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
@@ -555,6 +558,8 @@ int main(int argc, char **argv) {
     if (startSelftest) { int code = startInvalidRequests(client); IOServiceClose(client); return code; }
     if (startDeniedTest) { int code = startDenied(client); IOServiceClose(client); return code; }
     if (sessionSelftest) { int code = sessionInvalidRequests(client); IOServiceClose(client); return code; }
+    if (activationSelftest) { int code = configureInvalidRequests(client,ItlAwdlNativeActivationPreflight); IOServiceClose(client); return code; }
+    if (activationRequest) { int code = configureRun(client,configureOperation,ItlAwdlNativeActivationPreflight); IOServiceClose(client); return code; }
     if (configureSelftest) { int code = configureInvalidRequests(client); IOServiceClose(client); return code; }
     if (configure) { int code = configureRun(client, configureOperation); IOServiceClose(client); return code; }
     if (timingSelftest) { int code = timingInvalidRequests(client); IOServiceClose(client); return code; }

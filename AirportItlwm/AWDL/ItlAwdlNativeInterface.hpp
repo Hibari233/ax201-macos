@@ -39,6 +39,8 @@ public:
         const ItlAwdlNativeTransportRequest *, ItlAwdlNativeTransportResponse *);
     static IOReturn managedBSD(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeBSDRequest *, ItlAwdlNativeBSDResponse *);
+    static IOReturn probeActivationPreflight(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeConfigureResponse *);
     static IOReturn probeConfiguration(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeConfigureResponse *);
     static IOReturn probeTemplate(AirportItlwm *, ItlIwx *,
@@ -88,6 +90,7 @@ private:
     IOReturn backendResult(BackendIndex, IOReturn);
     ItlAwdlNativeConfigureResponse *backendTrace;
     ItlAwdlNativeConfigureResponse configurationResult;
+    ItlAwdlNativeConfigureResponse activationPreflightResult;
     ItlAwdlNativeTemplateResponse templateResult;
     ItlAwdlNativeTimingResponse timingResult;
     ItlAwdl::NativeSyncParameters syncParameters;

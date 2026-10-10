@@ -73,6 +73,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {nativeP2pUnicastTx, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
         {nativeP2pTxSeries, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
         {nativeP2pPsfSeries, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeActivationPreflight, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeConfigureResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -107,6 +108,12 @@ IOReturn ItlAwdlUserClient::nativeBSD(OSObject *o, void *, IOExternalMethodArgum
 IOReturn ItlAwdlUserClient::nativeConfigure(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
     return ItlAwdlNativeInterface::probeConfiguration(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeConfigureResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeActivationPreflight(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeActivationPreflight(self->driver, self->radio,
         static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
         static_cast<ItlAwdlNativeConfigureResponse *>(a->structureOutput));
 }
