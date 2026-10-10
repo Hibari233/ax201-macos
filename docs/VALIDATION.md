@@ -289,8 +289,8 @@ The diagnostic object was retired at the end; nothing starts it at boot.
 
 | Test | Current qualification |
 | --- | --- |
-| Fresh public-fork binary boot and loaded-hash verification | Revision 14 and earlier tested image identities verified above; release matrix remains incomplete |
-| WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 10/10 final Wi-Fi pings; sustained throughput pending |
+| Fresh public-fork binary boot and loaded-hash verification | Tested image identities through revision 16b verified; release matrix remains incomplete |
+| WPA2 2.4 GHz connect/reconnect and throughput | Bounded reconnection and 15/15 Wi-Fi pings in revision 16b; sustained throughput pending |
 | WPA2 5 GHz, supported channel groups | Pending |
 | WPA2/WPA3 transition with optional PMF | Pending |
 | WPA3-only with mandatory PMF, wrong password, rekey | Unsupported / pending implementation |
@@ -299,6 +299,7 @@ The diagnostic object was retired at the end; nothing starts it at boot.
 | Fixed AWDL data TX | Bounded firmware completions observed; zero echo replies, not bidirectional IPv6 |
 | Native role-6 object initialization/disposal | Revision 14 passed 32 cycles and 2,048 dispatch checks with deferred cleanup accounted for |
 | Native role-6 start/stop | One retained object reused across clients, then retired; recreation denied after the confirmed 24H32 logging panic |
+| Native packet/queue ownership | Packet memory and disabled queue setup, reuse, rejection and teardown qualified; enabled queues and BSD delivery pending |
 | Concurrent channel scheduling with normal data traffic | Pending implementation |
 | Native discovery and bidirectional AirDrop file hashes | Pending implementation |
 | Wi-Fi power cycling, repeated sleep/wake and roaming | Incomplete; whole-system sleep needs a separately stable platform |
@@ -348,3 +349,54 @@ No native peer manager, queue, BSD interface or radio transmission was created
 by this test, and the native peer-manager boot latch remains unused. PTM fields
 were storage round-trip tests only. Queue ownership, native AWDL transport,
 peer discovery and AirDrop file transfers remain unqualified.
+
+## Disabled native queue qualification — 2026-10-10
+
+Corrected source `c3c98f743371d8a771ac6f3efabe50b70cf07679` (revision 16b),
+AX201 / Sequoia 15.8.1 24H32:
+
+- Binary SHA-256: `6764edeab3a8541dd0799d9b229621ca8a9a02de9a04415581b0b9c2dc53aba7`
+- Loaded UUID: `A3AB2078-8F6A-3C27-975C-9A605206A2F7`; loaded identity and
+  external EFI hash matched after reboot. Verified revision 15 rollback retained.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38039032921)
+  passed Linux ASan/UBSan and both Sequoia builds (AWDL: 79 sources), including
+  the native ABI fixture and five diagnostic clients.
+- The two queue fixtures and actual queue subclasses each matched 189 native
+  slots. The unchanged packet/pool and AWDL interface layouts also passed their
+  119-slot and 560-slot/63-method comparisons in the initial revision 16 build.
+
+The first revision 16 image (`06c038d`) passed all seven early-exit setup stages
+but stopped the normal test before allocating packets: the diagnostic expected
+`kIOReturnNotOpen`, whereas the audited disabled RX path returns
+`kIOReturnOffline` (`0xe00002d7`). Cleanup completed with all owned counts zero,
+Wi-Fi remained reachable, and no new panic report appeared. The correction
+uses the native status and preserves unexpected error codes in the report.
+That initial failed run is not included in the following passing totals.
+
+Revision 16b passed eight malformed-request checks and **16 queue setup
+attempts**: five normal attempts, each reusing its pair through two
+initialize/finalize cycles, and 11 early exits across all seven setup stages.
+The totals were 16 pools, 15 TX queues, 14 RX queues, 25 balanced event-source
+adds/removals, 29 balanced initialization/finalization calls, and 29 released
+queue allocation references. All owned packet, pool and queue instance counts
+settled to zero after each attempt.
+
+The normal attempts allocated and returned 80 packet leases and compared
+63,120 bytes after the disabled RX queue rejected them. All 66 queue metadata
+checks and 126 request/enqueue rejection checks passed. No queue callback ran,
+and no cleanup error was reported. A separate regression check of selector 22
+passed its 24 packet payload/metadata/bounds checks. A non-root user-client open
+was denied after a successful root control.
+
+All 15 interface-bound WPA2 router pings passed around the queue tests. No new
+panic report appeared. Health checks passed with the existing 1920×1080 at
+240 Hz configuration, matching GPU/display hashes, zero GPU I/O failures and
+zero flip-latch timeouts. This records configuration/counters, not a new visual
+desktop confirmation. The native manager boot latch remained unused, and
+native interface/peer counts stayed zero.
+
+These were **disabled, unregistered queues with no channel/ring**. Successful
+rejection means the caller retained packet ownership; no packet was delivered
+to BSD, a radio, or a peer. This does not qualify enabled queue callbacks,
+registration error recovery, sustained operation, channel coexistence, native
+discovery or AirDrop transfers.
