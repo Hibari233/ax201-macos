@@ -64,6 +64,10 @@ static_assert(sizeof(apple80211_awdl_presence_mode) == 8, "Sequoia presence exte
 static_assert(__offsetof(apple80211_awdl_presence_mode, mode) == 4, "Sequoia presence offset");
 static_assert(sizeof(apple80211_awdl_extension_state_machine_parameter) == 20, "Sequoia extension extent");
 static_assert(__offsetof(apple80211_awdl_extension_state_machine_parameter, unk4) == 16, "Sequoia minimum extension");
+static_assert(sizeof(apple80211_awdl_sync_channel_sequence) == 400, "Sequoia channel-sequence extent");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, channels) == 12, "Sequoia sequence record start");
+static_assert(sizeof(apple80211_awdl_sync_channel_sequence::channels) == 384, "Sequoia 32 channel records");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, opaque_tail) == 396, "Sequoia sequence tail");
 static_assert(__offsetof(apple80211_awdl_election_id, election_id) == 4, "Sequoia election-ID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");

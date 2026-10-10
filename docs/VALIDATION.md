@@ -710,3 +710,41 @@ The interface remained unpublished and disabled. WPA2 router pings passed 12/12,
 and before/after GPU/display/power assertions passed. No RF synchronization,
 native packet delivery, discovery or transfer was tested. Later role-descriptor
 staging is not covered by this hardware result.
+
+## Native configure returns zero with staged role and timing — 2026-10-10
+
+Source `74155e3d21d201a6879082f7a54cda43dccf2c2b` (revision 29) includes revision
+28's role descriptor and the dependent presence/extension configuration.
+Revision 28 passed build/CI checks but was not separately installed.
+
+- Binary SHA-256: `419c4f55e4f299263b5a06e2311c56230c8049a50a58be106c190c961bdfd2db`
+- Loaded UUID: `8783A866-BDA6-3190-91A8-A9C402CC68D5`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38049564475)
+  passed all three jobs. The concrete interface matched 560 slots / 63 methods.
+  Installation verified its revision 27 rollback and unchanged EFI config.
+
+All 384 init-only contracts passed with zero failures or remaining instances.
+The role/timing checks include invalid-update preservation, owned addresses,
+presence boundaries, extension normalization and unchanged-output rejection
+when frame parameters disagree with the staged configuration. Eight malformed
+init requests, seven malformed configure requests and missing-session rejection
+also passed.
+
+The single native `configure()` call returned **zero** after eleven backend
+calls. Staged readback showed master channel 6, role 1, presence 4 and four
+extension counters of 3. BSSID, election ID, master channel, RSSI thresholds,
+presence, extension parameters and synchronization role were accepted. Cache
+size, election metric, minimum rate and channel sequence still returned
+unsupported; native configure continued past them. Consequently the diagnostic
+continues to report `native_configuration_verified: false`.
+
+Two repeated requests returned the saved trace and retained identity without
+additional backend calls. Four subsequent snapshots over 20 seconds retained
+one manager, no BSD interface, disabled queues and zero queue callbacks; backend
+calls stayed at eleven. WPA2 router pings passed 12/12 and before/after
+GPU/display/power assertions passed.
+
+This is disabled configuration and lifecycle evidence only. Native configure's
+zero result does not establish radio readiness: no RF synchronization, native
+packet delivery, peer discovery or AirDrop transfer occurred. The separate
+channel-sequence layout correction is not covered by this installed binary.

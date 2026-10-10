@@ -1014,6 +1014,19 @@ struct apple80211_channel_sequence {
 
 struct apple80211_awdl_sync_channel_sequence {
     uint32_t    version;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 has 32 full channel records, not 128 three-byte records.
+    // Its producer, radio builder and getter all use the same 12-byte stride.
+    uint8_t     flags;
+    uint8_t     length;
+    uint8_t     encoding;
+    uint8_t     step_count;
+    uint8_t     duplicate_count;
+    uint8_t     fill_channel;
+    uint8_t     reserved_0a[2];
+    struct apple80211_channel channels[32];
+    uint8_t     opaque_tail[4];
+#else
     uint8_t     pad1;
     uint8_t     length;             // 5
     uint8_t     encoding;           // 6
@@ -1022,9 +1035,15 @@ struct apple80211_awdl_sync_channel_sequence {
     uint8_t     fill_channel;       // 9
     uint8_t     pad2[6];
     struct apple80211_channel_sequence seqs[APPLE80211_MAX_CHANNELS];
+#endif
 } __attribute__((packed));
 
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, channels) == 12, "24H32 channel records offset");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, opaque_tail) == 396, "24H32 opaque tail offset");
+#else
 static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, seqs) == 16, "seqs offset error");
+#endif
 
 static_assert(sizeof(struct apple80211_awdl_sync_channel_sequence) == 0x190, "apple80211_awdl_sync_channel_sequence struct corrupt");
 

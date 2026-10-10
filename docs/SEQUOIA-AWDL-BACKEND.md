@@ -316,6 +316,19 @@ and encoder rejection when a caller disagrees with the owned timing. Registry
 properties expose only these staged numeric parameters. These settings still
 require application by the future radio scheduler before operational enable.
 
+The native channel-sequence request also retains its 400-byte extent, but its
+inherited internal layout was incorrect for Sequoia. In 24H32 it contains
+32 complete 12-byte `apple80211_channel` records beginning at offset 12, with
+channel numbers at 16 + 12 * index. Native producer, getter and radio builder
+agree on this layout; the four trailing bytes at offset 396 remain opaque.
+The conditional declaration and compile fixture now match these boundaries.
+
+The native encoding selector accepts 0/1; it is not the wire TLV encoding.
+Native value 1 selects a separate firmware encoding and bandwidth policy.
+Consequently both sequence backends remain unsupported until a bounded
+translation, channel-map validation and owned-plan encoder binding are
+implemented. Correcting the layout does not itself enable channel hopping.
+
 ## Native packet prototype
 
 Selector 22 and capability bit 4096 add an isolated, root-only packet-pool
