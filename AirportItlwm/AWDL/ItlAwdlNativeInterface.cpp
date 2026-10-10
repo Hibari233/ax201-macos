@@ -1281,7 +1281,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
 }
 
 // The bounded root transaction retains the controller, HAL, gate and native
-// object. Only this timer operates the radio; sleeping userspace is not a clock.
+// object. The timer owns the clocked work; native activation and final cleanup
+// run on the retained control thread, never an event-source callback.
 static uint64_t nativeRuntimeNowUs() {
     uint64_t absolute = 0, nanos = 0;
     clock_get_uptime(&absolute);
@@ -1303,13 +1304,16 @@ bool ItlAwdlNativeInterface::runtimeRadioReady() const {
     return in && in->in_id == 1 && !in->in_color && ic->ic_state == IEEE80211_S_RUN &&
         ic->ic_opmode == IEEE80211_M_MONITOR && (ic->ic_if.if_flags & IFF_RUNNING) &&
         (r->com.sc_flags & required) == required &&
-        !(r->com.sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL | IWX_FLAG_SHUTDOWN));
+        !(r->com.sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL | IWX_FLAG_SHUTDOWN)) &&
+        isset(ic->ic_chan_active, r->awdl.channel) && ic->ic_channels[r->awdl.channel].ic_freq &&
+        !(ic->ic_channels[r->awdl.channel].ic_flags & (IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_DFS));
 }
 
 void ItlAwdlNativeInterface::synchronizationRadioStopped() {
     if (!runtimeRadio || runtimePhase == RuntimeDone || runtimePhase == RuntimeIdle) return;
     runtimeSyncEnabled = runtimeClockQualified = false;
     runtimePhase = RuntimeStopping;
+    setProperty("AX201NativeRuntimePhase", uint32_t(runtimePhase), 32);
     runtimeTimeline.clear();
     if (runtimeTimer) runtimeTimer->cancelTimeout();
 }
@@ -1322,6 +1326,7 @@ void ItlAwdlNativeInterface::runtimeTick() {
     auto r = runtimeRadio;
     if (!r || (runtimePhase != RuntimeStarting && runtimePhase != RuntimeRunning)) return;
     ++runtimeResult.timer_ticks;
+    if (runtimeResult.timer_ticks == 1) IOLog("AX201 native runtime: first timer callback\n");
     auto fail = [&](IOReturn error) {
         if (!runtimeResult.last_error) runtimeResult.last_error = error;
         synchronizationRadioStopped();
@@ -1352,31 +1357,12 @@ void ItlAwdlNativeInterface::runtimeTick() {
             syncParameters.periodTu(), uint8_t(presenceMode), &anchor)) { rearm(); return; }
         if (!runtimeTimeline.start(anchor.start_gp2_us, syncParameters.periodTu(),
             uint8_t(presenceMode), anchor.counter)) { fail(kIOReturnBadArgument); return; }
-        auto state = nativeStartState();
-        auto peerClass = nativePeerClass();
-        if (!state || !state->peerManager || !peerClass || !state->peerManager->metaCast(peerClass)) {
-            fail(kIOReturnNotReady); return;
-        }
-        auto supervisor = nativeAwdlSupervisor(state->peerManager);
-        if (!supervisor || !supervisor->metaCast("IO80211P2PSupervisor")) { fail(kIOReturnNotReady); return; }
         runtimePhase = RuntimeReady;
-        runtimeEnableInvoked = true;
-        auto &trace = runtimeResult.activation;
-        trace.attempted = 1;
-        trace.backend_before = backendCalls;
-        backendTrace = &trace;
-        trace.native_result = nativeAwdlEnable(state->peerManager);
-        backendTrace = nullptr;
-        trace.backend_after = backendCalls;
-        // Native enable may return success without calling SYNC_ENABLED.
-        // Require the backend transition and unchanged real radio ownership.
-        if (trace.native_result || !runtimeSyncEnabled || !runtimeRadioReady()) {
-            fail(trace.native_result ? trace.native_result : kIOReturnNotReady); return;
-        }
-        runtimeNativeEnabled = true;
-        runtimePhase = RuntimeRunning;
-        runtimeResult.ready = 1;
+        setProperty("AX201NativeRuntimePhase", uint32_t(runtimePhase), 32);
+        IOLog("AX201 native runtime: radio and GP2 ready; awaiting control-thread activation\n");
+        return;
     }
+
     ItlAwdl::LocalSyncBoundary boundary = {};
     if (!runtimeTimeline.sample(clock.gp2_us, &boundary)) { fail(kIOReturnError); return; }
     ItlAwdl::NativeAvailabilityWindowContext context = {};
@@ -1388,11 +1374,13 @@ void ItlAwdlNativeInterface::runtimeTick() {
         ItlAwdl::NativeAvailabilityWindowStart event = {};
         if (!ItlAwdl::encodeNativeAvailabilityWindowStart(context, &event)) { fail(kIOReturnError); return; }
         // false means the controller's gate completed dispatch, not a peer ACK.
+        if (!runtimeResult.aw_events) IOLog("AX201 native runtime: entering first AW event\n");
         if (reportDataPathEvents(ItlAwdl::NativeAvailabilityWindowStartEvent,
             event.bytes, sizeof(event), true)) {
             ++runtimeResult.aw_event_errors; fail(kIOReturnError); return;
         }
         ++runtimeResult.aw_events;
+        if (runtimeResult.aw_events == 1) IOLog("AX201 native runtime: first AW event returned\n");
         runtimeHadWindow = true; runtimeWindow = context.counter;
     }
     if (runtimePhase != RuntimeRunning || !runtimeSyncEnabled || !runtimeRadioReady()) return;
@@ -1413,12 +1401,60 @@ void ItlAwdlNativeInterface::runtimeTick() {
     rearm();
 }
 
+void ItlAwdlNativeInterface::activateSynchronization() {
+    if (runtimePhase != RuntimeReady || runtimeEnableInvoked) return;
+    auto parent = OSDynamicCast(AirportItlwm, controller);
+    auto queue = parent ? parent->getWorkQueue() : nullptr;
+    auto state = nativeStartState();
+    auto peerClass = nativePeerClass();
+    if (!queue || queue->onThread() || !queue->inGate() || !runtimeRadioReady() ||
+        !state || !state->peerManager || !peerClass || !state->peerManager->metaCast(peerClass)) {
+        runtimeResult.last_error = kIOReturnNotReady;
+        synchronizationRadioStopped(); return;
+    }
+    auto supervisor = nativeAwdlSupervisor(state->peerManager);
+    if (!supervisor || !supervisor->metaCast("IO80211P2PSupervisor")) {
+        runtimeResult.last_error = kIOReturnNotReady;
+        synchronizationRadioStopped(); return;
+    }
+    // Preserve the calling context used by the successful rejection preflight:
+    // caller thread holding the gate, never the work-loop's event-source thread.
+    // Timer/RX callbacks continue to own clocked radio work after activation.
+    auto error = runtimeTimer->setTimeoutUS(ItlAwdl::NativeRuntimeTickUs);
+    if (error) { runtimeResult.last_error = error; synchronizationRadioStopped(); return; }
+    runtimeEnableInvoked = true;
+    auto &trace = runtimeResult.activation;
+    trace.attempted = 1;
+    trace.backend_before = backendCalls;
+    backendTrace = &trace;
+    IOLog("AX201 native runtime: entering native enable on control thread\n");
+    trace.native_result = nativeAwdlEnable(state->peerManager);
+    backendTrace = nullptr;
+    trace.backend_after = backendCalls;
+    IOLog("AX201 native runtime: native enable result=0x%x backend_enabled=%u\n",
+        trace.native_result, runtimeSyncEnabled);
+    if (trace.native_result || !runtimeSyncEnabled || !runtimeRadioReady()) {
+        runtimeResult.last_error = trace.native_result ? trace.native_result : kIOReturnNotReady;
+        synchronizationRadioStopped(); return;
+    }
+    runtimeNativeEnabled = true;
+    runtimePhase = RuntimeRunning;
+    runtimeResult.ready = 1;
+    setProperty("AX201NativeRuntimePhase", uint32_t(runtimePhase), 32);
+    error = runtimeTimer->setTimeoutUS(ItlAwdl::NativeRuntimeTickUs);
+    if (error) { runtimeResult.last_error = error; synchronizationRadioStopped(); }
+}
+
 void ItlAwdlNativeInterface::synchronizationReceive(const uint8_t *bytes, size_t length,
     uint32_t channel, int32_t rssi, uint32_t gp2) {
     if (runtimePhase != RuntimeRunning || !runtimeNativeEnabled || !runtimeHadWindow || !runtimeClockQualified ||
         !runtimeSyncEnabled || !runtimeRadioReady() || channel != runtimeRadio->awdl.channel) return;
     const ItlAwdl::NativeActionRxContext rx = {channel, rssi, gp2, true};
+    if (!runtimeResult.rx_handed_off && !runtimeResult.rx_rejected)
+        IOLog("AX201 native runtime: entering first action RX\n");
     auto error = receiveAction(bytes, length, rx);
+    if (!runtimeResult.rx_handed_off && !runtimeResult.rx_rejected)
+        IOLog("AX201 native runtime: first action RX returned 0x%x\n", error);
     if (error) { ++runtimeResult.rx_rejected; runtimeResult.rx_last_error = error; }
     else ++runtimeResult.rx_handed_off;
 }
@@ -1437,7 +1473,9 @@ void ItlAwdlNativeInterface::finishSynchronization() {
         auto state = nativeStartState();
         if (state && state->peerManager) {
             ++runtimeResult.native_disable_calls;
+            IOLog("AX201 native runtime: entering native disable\n");
             nativeAwdlDisable(state->peerManager, 0);
+            IOLog("AX201 native runtime: native disable returned\n");
         }
     }
     runtimeNativeEnabled = false;
@@ -1475,6 +1513,7 @@ void ItlAwdlNativeInterface::finishSynchronization() {
     setProperty("AX201NativeRuntimeResult", &runtimeResult, sizeof(runtimeResult));
     runtimeRadio = nullptr;
     runtimePhase = RuntimeDone;
+    setProperty("AX201NativeRuntimePhase", uint32_t(runtimePhase), 32);
 }
 
 IOReturn ItlAwdlNativeInterface::runSynchronization(AirportItlwm *parent, ItlIwx *radio,
@@ -1522,6 +1561,7 @@ IOReturn ItlAwdlNativeInterface::runSynchronization(AirportItlwm *parent, ItlIwx
         if (!hasWindow) return kIOReturnNotReady;
         o->retain(); c->object = o;
         o->runtimeRadio = r; o->runtimePhase = RuntimeStarting;
+        o->setProperty("AX201NativeRuntimePhase", uint32_t(o->runtimePhase), 32);
         o->runtimeResult = {};
         o->runtimeResult.attempted = 1;
         o->runtimeResult.tx_limit = ItlAwdl::NativeRuntimeTxLimit;
@@ -1543,16 +1583,19 @@ IOReturn ItlAwdlNativeInterface::runSynchronization(AirportItlwm *parent, ItlIwx
         r->awdlNativeTraceCount = r->awdlNativeTraceIndex = 0;
         bzero(r->awdlNativeTrace, sizeof(r->awdlNativeTrace));
         ItlAwdlBeginRequest begin = *c->request; begin.channel = o->masterChannel;
+        IOLog("AX201 native runtime: beginning bounded radio lease\n");
         error = r->awdlBegin(o, &begin);
+        IOLog("AX201 native runtime: radio begin returned 0x%x\n", error);
         if (!error) error = o->runtimeTimer->setTimeoutUS(ItlAwdl::NativeRuntimeTickUs);
         if (error) o->runtimeResult.last_error = error;
         return kIOReturnSuccess;
     }, &call);
     if (call.object) {
         for (uint32_t elapsed = 0; !result && !call.done && elapsed < request->dwell_ms + 200; elapsed += 20) {
-            IOSleep(20); // Object lifetime only; all synchronization runs on the kernel timer.
+            IOSleep(20); // Activation/cleanup polling; the timer owns clocked synchronization.
             result = gate->runAction([](OSObject *, void *arg, void *, void *, void *) -> IOReturn {
                 auto c = static_cast<Call *>(arg); auto o = c->object;
+                if (o->runtimePhase == RuntimeReady) o->activateSynchronization();
                 c->done = o->runtimePhase == RuntimeStopping || o->runtimePhase == RuntimeDone ||
                     o->runtimeResult.last_error || c->parent->isInactive();
                 return kIOReturnSuccess;

@@ -2,7 +2,10 @@
 
 Selector 37 connects the retained native manager to the real P2P discovery
 context. A kernel timer waits for the current firmware generation's START
-notification and GP2/RX correlation before invoking native `enableAWDL`.
+notification and GP2/RX correlation. It then hands activation to the retained
+ioctl caller, which invokes native `enableAWDL` under the gate, off the
+work-loop's event-source thread. This preserves the tested preflight calling
+context while clocked radio work remains on the kernel timer.
 The implemented `setAWDL_SYNC_ENABLED` accepts enable only inside that prepared
 transaction; it does not change Apple's private enabled flags. Selector 36
 remains a negative, no-radio activation preflight.

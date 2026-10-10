@@ -98,6 +98,7 @@ private:
     uint64_t runtimeNextTxUs;
     bool runtimeRadioReady() const;
     void runtimeTick();
+    void activateSynchronization();
     void finishSynchronization();
     static void runtimeTimeout(OSObject *, IOTimerEventSource *);
     enum BackendIndex {
