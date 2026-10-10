@@ -1668,3 +1668,37 @@ not establish discovery in this trial.
 The radio stopped normally, the retained manager was unchanged, WPA2 passed
 33/33 baseline/TX pings and GPU/display/power checks passed. Native activation,
 RX handoff, IPv6 packet transport and actual AirDrop transfers remain unfinished.
+
+## Native activation rejection trace — 2026-10-11
+
+Source `7e9215c2e13396a18ee1a3df033bf29969ca6c36` (revision 60), binary
+`ed60c71c2f1df047288bdc459b0e4d1b10328b85cbf505cc2489a744d06e4c53`, loaded
+UUID `28C3CB79-B0F8-308A-8A70-91AEBE16B3E4`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38080311516)
+passed all three jobs. Local UBSan/Python checks, both ABI comparisons and the
+384-contract baseline passed. Seven additional malformed-selector checks passed.
+Rollback is revision 59.
+
+With STA power off, the exported native enable method reached four backend
+calls on the retained manager, in this order:
+
+| Backend request | Result |
+| --- | --- |
+| `getAWDL_AF_SECONDARY_PAYLOAD_CAPABILITIES` | Unsupported |
+| `setAWDL_SYNC_FRAME_TEMPLATE` | Success |
+| `setAWDL_ELECTION_PARAMS` | Unsupported |
+| `setAWDL_SYNC_ENABLED` | Unsupported |
+
+The top-level result was `0xe00002c7` (Unsupported), with no trace overflow.
+Thus this invocation reached the still-unimplemented synchronization-enable
+backend; it did not silently skip the whole native startup path. The earlier
+two Unsupported responses did not prevent this invocation reaching that final
+request. No conclusion about their necessity in a working implementation follows.
+
+The native P2P supervisor existed and matched its expected class. A repeated
+request returned the exact cached response without increasing backend calls;
+later radio qualification was refused, as intended after native staging changes.
+No interface, transport queue or BSD interface was enabled by this diagnostic.
+The single retained manager persisted, WPA2 passed 33/33 pings, and post-test
+GPU/display/power checks passed. This records an integration boundary, not a fix
+for synchronization or evidence that native AirDrop works.
