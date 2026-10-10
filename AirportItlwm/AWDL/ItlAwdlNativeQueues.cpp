@@ -28,6 +28,11 @@ ItlAwdlNativeRxQueue *ItlAwdlNativeRxQueue::withPool(IOSkywalkPacketBufferPool *
 }
 
 namespace {
+IOReturn expectResult(IOReturn actual, IOReturn expected) {
+    // Preserve unexpected native errors in the report instead of losing them
+    // behind a boolean comparison. Unexpected success is still a failure.
+    return actual == expected ? kIOReturnSuccess : actual ? actual : kIOReturnError;
+}
 // A probe never enables the queues. These callbacks consume/produce zero
 // packets, and any invocation fails the diagnostic instead of claiming TX.
 unsigned int txCallback(OSObject *, IOSkywalkTxSubmissionQueue *,
@@ -73,9 +78,8 @@ IOReturn rejectPackets(ItlAwdlNativePacketPool *pool, ItlAwdlNativeRxQueue *rx,
         // An unexpected successful enqueue transfers ownership. Do not touch
         // that packet again; finalization must dispose any queue-owned leases.
         if (!enqueued) packets[i] = nullptr;
-        if (enqueued != kIOReturnNotOpen) {
-            result = kIOReturnError; break;
-        }
+        result = expectResult(enqueued, kIOReturnOffline);
+        if (result) break;
         ++out->rejections;
     }
     for (unsigned int i = 0; i < 8 && !result; ++i) {
@@ -125,8 +129,9 @@ IOReturn ItlAwdlProbeNativeQueues(OSObject *owner, IOWorkLoop *loop, unsigned in
         result = kIOReturnError;
         if (!inspect(tx, pool, 1, 0, 1, out) || !inspect(rx, pool, 2, 1, 4, out)) break;
         // No work loop means no requests may be scheduled.
-        if (tx->requestDequeue(nullptr, 0) != kIOReturnNotReady ||
-            rx->requestEnqueue(nullptr, 0) != kIOReturnNotReady) break;
+        result = expectResult(tx->requestDequeue(nullptr, 0), kIOReturnNotReady);
+        if (!result) result = expectResult(rx->requestEnqueue(nullptr, 0), kIOReturnNotReady);
+        if (result) break;
         out->rejections += 2;
         result = loop->addEventSource(tx);
         if (result) break;
@@ -145,11 +150,12 @@ IOReturn ItlAwdlProbeNativeQueues(OSObject *owner, IOWorkLoop *loop, unsigned in
             if (result) break;
             rxInitialized = true; ++out->initialized;
             if (stopAfter == 7) break;
-            if (!inspect(tx, pool, 1, 0, 1, out) || !inspect(rx, pool, 2, 1, 4, out) ||
-                tx->requestDequeue(nullptr, 0) != kIOReturnNotReady ||
-                rx->requestEnqueue(nullptr, 0) != kIOReturnNotOpen) {
+            if (!inspect(tx, pool, 1, 0, 1, out) || !inspect(rx, pool, 2, 1, 4, out)) {
                 result = kIOReturnError; break;
             }
+            result = expectResult(tx->requestDequeue(nullptr, 0), kIOReturnNotReady);
+            if (!result) result = expectResult(rx->requestEnqueue(nullptr, 0), kIOReturnOffline);
+            if (result) break;
             out->rejections += 2;
             result = rejectPackets(pool, rx, out);
             if (result) break;

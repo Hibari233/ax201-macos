@@ -248,7 +248,7 @@ to zero within the bounded wait outside the gate. Callbacks return zero and
 any invocation fails this disabled-queue diagnostic.
 
 A normal cycle also attempts to enqueue eight simultaneous CPU packet leases
-into the disabled RX queue, twice. Every call must return `kIOReturnNotOpen`
+into the disabled RX queue, twice. Every call must return `kIOReturnOffline`
 without taking ownership. The driver checks retained payload contents before
 returning them. It verifies queue direction, identifier, empty capacity and
 the native queue-info command. The queue base's buffer-count accessor returns
