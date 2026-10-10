@@ -1165,3 +1165,32 @@ harness was no longer running. Total verified WPA2 pings were 42/42, including
 the separate recovery check. Future RF harnesses should run detached with saved
 progress so a control-session loss cannot interrupt post-test verification.
 Native AirDrop remains unavailable; no identical broadcast retry was made.
+
+## Explicit management header length — 2026-10-10
+
+Source `054fe20c5597e62c9a22ceefe626fe74caa443df` (revision 43) supplies
+the MAC header length in the bounded native TX command, as the Intel gen3
+reference path does even without checksum offload. Binary SHA-256:
+`a086dc04a976a7af578a296ab9716017164cac817ca479c81c7df20b36caa377`;
+loaded UUID `5E361D7C-D5A2-3D31-91C8-13C7323066FB`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38064881870)
+passed all three jobs. Twelve local C++ UBSan suites, five Python checks and
+both 560-slot/63-method ABI comparisons passed. The rollback is revision 42.
+
+All 384 initialization contracts and configuration/timing/template checks
+passed. Passive sessions heard 22 and 17 owned actions and found 7 and 4 shared
+channel-6 windows. Diagnostic-ring drops were 6 and 1, with no invalid frames.
+One broadcast was then submitted: command metadata confirmed a 24-byte header
+and `offload_assist == 0x0c00`. Completion still took **40,795 us**, exceeding
+the unchanged 5 ms guard. The matching DMA reply appeared 40,315 us after the
+doorbell; the interrupt filter ran at 40,697 us. Firmware reported success,
+168 us media duration and no retransmissions or Bluetooth kills. Both windows
+had only 23,949 us remaining at the last clock read. This corrects a command
+format discrepancy but does not solve or locate the delayed completion.
+
+The receiving Mac's read-only observer found no transmitter entry in 211
+samples over 44.9 seconds; its own address was present throughout. This is not
+proof of absent RF reception. The detached harness completed restoration and
+recorded its failed timing assertion afterward. WPA2 passed 42/42 router pings;
+GPU/display/power checks passed, with the same retained manager. No interface,
+queue or synchronization enablement was attempted. Native AirDrop is unavailable.
