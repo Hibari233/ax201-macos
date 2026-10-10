@@ -137,6 +137,75 @@ IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_ID(apple80211_awdl_election_id
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_METRIC(apple80211_awdl_election_metric *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_ELECTION_METRIC, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 12, "24H32 election-metric request");
+    // The peer manager resolves override/default policy before this call.
+    // The radio setter consumes the resulting full 32-bit word, including 0.
+    electionMetric = data->metric;
+    electionMetricValid = true;
+    setProperty("AX201StagedElectionMetric", electionMetric, 32);
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_METRIC(apple80211_awdl_election_metric *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_ELECTION_METRIC, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !electionMetricValid) return finish(kIOReturnNotReady);
+    apple80211_awdl_election_metric result = {};
+    result.version = 1;
+    result.metric = electionMetric;
+    *data = result;
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::setAWDL_MIN_RATE(apple80211_awdl_min_rate *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_MIN_RATE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 8, "24H32 minimum-rate request");
+    // Native 24H32 doubles this byte for firmware's 500-kbit/s rate units;
+    // its default is 12. Limit staging to AX201's legacy OFDM rates. Applying
+    // the rate to a native TX path remains part of the enable transaction.
+    switch (data->min_rate) {
+        case 6: case 9: case 12: case 18: case 24: case 36: case 48: case 54: break;
+        default: return finish(kIOReturnUnsupported);
+    }
+    minimumRateMbps = data->min_rate;
+    minimumRateValid = true;
+    setProperty("AX201StagedMinRateMbps", minimumRateMbps, 32);
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_MIN_RATE(apple80211_awdl_min_rate *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_MIN_RATE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !minimumRateValid) return finish(kIOReturnNotReady);
+    apple80211_awdl_min_rate result = {};
+    result.version = 1;
+    result.min_rate = minimumRateMbps;
+    *data = result;
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::setAWDL_MASTER_CHANNEL(apple80211_awdl_master_channel *data) {
     const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_MASTER_CHANNEL, r); };
     if (!data) return finish(kIOReturnBadArgument);
@@ -418,7 +487,8 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
         resourcesDisposed || isInactive() || !syncTemplate.length() ||
-        !electionIdValid || !masterChannelValid || parameters.masterChannel != masterChannel ||
+        !electionIdValid || !electionMetricValid || !minimumRateValid ||
+        !masterChannelValid || parameters.masterChannel != masterChannel ||
         !stagedSyncRoleValid || stagedSyncRole.operation_mode != 1 ||
         !ItlAwdl::equalMac(parameters.master, stagedSyncRole.master) ||
         !ItlAwdl::equalMac(context.source, selfAddress.ether_addr_octet) ||
@@ -892,6 +962,10 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     networkConfiguration = {};
     electionId = 0;
     electionIdValid = false;
+    electionMetric = 0;
+    electionMetricValid = false;
+    minimumRateMbps = 0;
+    minimumRateValid = false;
     masterChannel = 0;
     masterChannelValid = false;
     bzero(electionRssiThresholds, sizeof(electionRssiThresholds));
@@ -940,6 +1014,12 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     networkConfiguration.clear();
     electionId = 0;
     electionIdValid = false;
+    electionMetric = 0;
+    electionMetricValid = false;
+    minimumRateMbps = 0;
+    minimumRateValid = false;
+    removeProperty("AX201StagedElectionMetric");
+    removeProperty("AX201StagedMinRateMbps");
     masterChannel = 0;
     masterChannelValid = false;
     removeProperty("AX201StagedMasterChannel");
@@ -1244,6 +1324,66 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     idFailed |= object->getAWDL_ELECTION_ID(&id) != kIOReturnSuccess || id.election_id != 0x1234;
     if (idFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_ELECTION_METRIC(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_election_metric metric;
+    memset(&metric, 0xa5, sizeof(metric));
+    auto untouchedMetric = metric;
+    ++out->methods_checked;
+    if (object->getAWDL_ELECTION_METRIC(&metric) != kIOReturnNotReady ||
+        memcmp(&metric, &untouchedMetric, sizeof(metric))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_ELECTION_METRIC(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    bool metricFailed = false;
+    const uint32_t metrics[] = {0U, UINT32_MAX, 0x12345678U, 65U};
+    for (uint32_t value : metrics) {
+        metric = {};
+        metric.metric = value;
+        metric.override_metric = 1;
+        metricFailed |= object->setAWDL_ELECTION_METRIC(&metric) != kIOReturnSuccess;
+        metric.metric ^= 1; // Producer mutation cannot change the saved word.
+        metricFailed |= concrete->electionMetric != value;
+        metricFailed |= object->getAWDL_ELECTION_METRIC(&metric) != kIOReturnSuccess ||
+            metric.version != 1 || metric.metric != value || metric.override_metric ||
+            metric.reserved_09[0] || metric.reserved_09[1] || metric.reserved_09[2];
+    }
+    metric.version = 2;
+    metricFailed |= object->setAWDL_ELECTION_METRIC(&metric) != kIOReturnBadArgument;
+    metricFailed |= object->getAWDL_ELECTION_METRIC(&metric) != kIOReturnSuccess || metric.metric != 65;
+    if (metricFailed) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->getAWDL_MIN_RATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_min_rate minimumRate;
+    memset(&minimumRate, 0xa5, sizeof(minimumRate));
+    auto untouchedRate = minimumRate;
+    ++out->methods_checked;
+    if (object->getAWDL_MIN_RATE(&minimumRate) != kIOReturnNotReady ||
+        memcmp(&minimumRate, &untouchedRate, sizeof(minimumRate))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_MIN_RATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    bool rateFailed = false;
+    const uint8_t rates[] = {6, 9, 18, 24, 36, 48, 54, 12};
+    for (uint8_t value : rates) {
+        minimumRate = {};
+        minimumRate.min_rate = value;
+        rateFailed |= object->setAWDL_MIN_RATE(&minimumRate) != kIOReturnSuccess;
+        memset(&minimumRate, 0xa5, sizeof(minimumRate));
+        rateFailed |= object->getAWDL_MIN_RATE(&minimumRate) != kIOReturnSuccess ||
+            minimumRate.version != 1 || minimumRate.min_rate != value ||
+            minimumRate.reserved_05[0] || minimumRate.reserved_05[1] || minimumRate.reserved_05[2];
+    }
+    const uint8_t unsupportedRates[] = {0, 1, 11, 17, 255};
+    for (uint8_t value : unsupportedRates) {
+        minimumRate.min_rate = value;
+        rateFailed |= object->setAWDL_MIN_RATE(&minimumRate) != kIOReturnUnsupported;
+    }
+    minimumRate.version = 2;
+    minimumRate.min_rate = 12;
+    rateFailed |= object->setAWDL_MIN_RATE(&minimumRate) != kIOReturnBadArgument;
+    rateFailed |= object->getAWDL_MIN_RATE(&minimumRate) != kIOReturnSuccess || minimumRate.min_rate != 12;
+    if (rateFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->getAWDL_MASTER_CHANNEL(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     apple80211_awdl_master_channel master = {0xaaaaaaaa, 0xaaaaaaaa};
     ++out->methods_checked;
@@ -1486,6 +1626,12 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     concrete->networkConfiguration.clear();
     concrete->electionId = 0;
     concrete->electionIdValid = false;
+    concrete->electionMetric = 0;
+    concrete->electionMetricValid = false;
+    concrete->minimumRateMbps = 0;
+    concrete->minimumRateValid = false;
+    concrete->removeProperty("AX201StagedElectionMetric");
+    concrete->removeProperty("AX201StagedMinRateMbps");
     concrete->masterChannel = 0;
     concrete->masterChannelValid = false;
     concrete->removeProperty("AX201StagedMasterChannel");

@@ -53,6 +53,10 @@ static_assert(__is_same(decltype(static_cast<IOSkywalkPacket *>(nullptr)->prepar
 static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "Sequoia sync params length");
 static_assert(sizeof(apple80211_awdl_bssid) == 16, "Sequoia BSSID pair length");
 static_assert(sizeof(apple80211_awdl_election_id) == 8, "Sequoia election-ID length");
+static_assert(sizeof(apple80211_awdl_election_metric) == 12, "Sequoia election-metric length");
+static_assert(__offsetof(apple80211_awdl_election_metric, override_metric) == 8, "Sequoia metric override");
+static_assert(sizeof(apple80211_awdl_min_rate) == 8, "Sequoia minimum-rate length");
+static_assert(__offsetof(apple80211_awdl_min_rate, min_rate) == 4, "Sequoia minimum-rate byte");
 static_assert(sizeof(apple80211_awdl_master_channel) == 8, "Sequoia master-channel length");
 static_assert(__offsetof(apple80211_awdl_master_channel, master_channel) == 4, "Sequoia master-channel offset");
 static_assert(sizeof(apple80211_awdl_election_rssi_thresholds) == 20, "Sequoia election-RSSI length");

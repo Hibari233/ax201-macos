@@ -56,12 +56,13 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 47 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 43 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Sixteen implemented methods instead receive fully sized audited structures:
+bytes. Twenty implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
-the native 16-bit value. Master-channel set/get stage a channel from the radio's
+the native 16-bit value. Election-metric set/get retain the resolved 32-bit word,
+and minimum-rate set/get retain a supported legacy OFDM rate. Master-channel set/get stage a channel from the radio's
 active map; election-RSSI set/get normalize four signed bytes. The sync-state
 setter owns a disabled role descriptor; presence and extension getters/setters
 retain the associated timing parameters. Channel-sequence set/get own and
@@ -317,6 +318,22 @@ and encoder rejection when a caller disagrees with the owned timing. Registry
 properties expose only these staged numeric parameters. These settings still
 require application by the future radio scheduler before operational enable.
 
+The Sequoia election-metric request is 12 bytes, not the legacy eight: the
+native get/set wrappers require 12, and the peer manager reads an override byte
+at offset 8 before forwarding the resolved metric at offset 4 to the backend.
+The disabled backend owns the complete 32-bit metric without reinterpreting
+the override policy; readback clears the override and padding. Zero and the
+full unsigned range are preserved. This does not program firmware elections.
+
+The minimum-rate request has an eight-byte ioctl extent, with its rate byte at
+offset 4. The native default is 12, and the radio setter doubles it into firmware
+500-kbit/s units. The disabled backend accepts the AX201's legacy OFDM rates
+6, 9, 12, 18, 24, 36, 48 and 54 Mbps; unsupported rates preserve the previous
+selection. Applying that rate to native TX still requires a radio enable path.
+Canonical readback clears padding. These two layouts are corrected only for
+the Sequoia WCL target. Runtime contracts check full-range metric ownership,
+all supported rates, rejected updates, unset reads and canonical output.
+
 The native channel-sequence request also retains its 400-byte extent, but its
 inherited internal layout was incorrect for Sequoia. In 24H32 it contains
 32 complete 12-byte `apple80211_channel` records beginning at offset 12, with
@@ -341,7 +358,8 @@ tests cover every short request extent, bad final records, ownership, reset,
 unused-record handling and independent native-record-to-wire positions.
 Hardware contracts also check virtual set/get dispatch and frame rejection for
 a mismatched or absent plan. Firmware hopping and synchronization enable remain
-unimplemented; the installed revision 29 result predates this implementation.
+unimplemented. Revision 31 qualified this disabled basic-plan path; see
+`VALIDATION.md` for its exact source and runtime scope.
 
 ## Native packet prototype
 

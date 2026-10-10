@@ -83,6 +83,10 @@ private:
     ItlAwdl::NativeBssidConfiguration networkConfiguration;
     uint16_t electionId;
     bool electionIdValid;
+    uint32_t electionMetric;
+    bool electionMetricValid;
+    uint8_t minimumRateMbps;
+    bool minimumRateValid;
     uint16_t masterChannel;
     bool masterChannelValid;
     int32_t electionRssiThresholds[4];

@@ -748,3 +748,30 @@ This is disabled configuration and lifecycle evidence only. Native configure's
 zero result does not establish radio readiness: no RF synchronization, native
 packet delivery, peer discovery or AirDrop transfer occurred. The separate
 channel-sequence layout correction is not covered by this installed binary.
+
+## Native basic channel plan accepted — 2026-10-10
+
+Source `58f19bcf772e87ee52c51a449a95a390da37cdcf` (revision 31) includes revision
+30's 400-byte channel layout correction and the bounded encoding-0 backend.
+
+- Binary SHA-256: `2a57ff6d8237a5d77ec99733c249095e10206836e99136e0b550fca73244623c`
+- Loaded UUID: `2F88D7E8-98D3-32D2-8C04-DA24A0E4B310`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38050684852)
+  passed all three jobs, including nine C++ suites under Linux ASan/UBSan and
+  both Sequoia builds. Local UBSan and the 560-slot concrete-interface comparison
+  also passed. The installation preserved a verified revision 29 rollback.
+
+All 384 initialization contracts passed, including sequence readback, producer
+ownership, invalid-update preservation and encoder rejection for a different
+or absent plan. Malformed requests and the missing-session rejection passed.
+The one retained native configuration accepted the channel sequence and returned
+zero after eleven calls. Readback showed 16 slots, with channel 6 in slots 0
+and 8 and unavailable slots elsewhere, at a four-AW step. Cache size, election
+metric and minimum rate remained unsupported. Repeated configure requests
+returned the saved trace and identity without further backend calls.
+
+Four snapshots over 20 seconds retained one unpublished manager with eleven
+backend calls and no BSD interface. WPA2 router pings passed 12/12; GPU, display
+and power checks passed. This qualifies disabled configuration only: no native
+RF synchronization, peer discovery or transfer occurred. The later election
+metric/minimum-rate implementation is not covered by this installed result.

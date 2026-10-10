@@ -910,6 +910,12 @@ struct apple80211_awdl_election_metric
 {
     uint32_t    version;
     uint32_t    metric;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 requires 12 bytes. The peer manager resolves the override flag
+    // before dispatching the resulting metric word to the radio backend.
+    uint8_t     override_metric;
+    uint8_t     reserved_09[3];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_sync_enabled
@@ -993,6 +999,10 @@ struct apple80211_awdl_secondary_master_channel {
 struct apple80211_awdl_min_rate {
     uint32_t    version;
     uint8_t    min_rate;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // The 24H32 ioctl extent is eight bytes, although the rate occupies one.
+    uint8_t     reserved_05[3];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_election_rssi_thresholds {
