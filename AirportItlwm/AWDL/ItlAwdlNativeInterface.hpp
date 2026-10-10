@@ -39,6 +39,8 @@ public:
         const ItlAwdlNativeBSDRequest *, ItlAwdlNativeBSDResponse *);
     static IOReturn probeConfiguration(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeConfigureResponse *);
+    static IOReturn probeTemplate(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTemplateResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -77,8 +79,9 @@ private:
     };
     static_assert(BackendCount == 63, "24H32 backend trace indices");
     IOReturn backendResult(BackendIndex, IOReturn);
-    bool configurationTracing;
+    ItlAwdlNativeConfigureResponse *backendTrace;
     ItlAwdlNativeConfigureResponse configurationResult;
+    ItlAwdlNativeTemplateResponse templateResult;
     ItlAwdl::ActionTemplate syncTemplate;
     ItlAwdl::NativeBssidConfiguration networkConfiguration;
     uint16_t electionId;

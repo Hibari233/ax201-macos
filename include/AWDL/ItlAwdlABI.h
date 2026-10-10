@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -186,6 +186,15 @@ struct ItlAwdlNativeConfigureResponse {
     uint64_t registry_id;
     ItlAwdlNativeBackendTrace trace[ITL_AWDL_CONFIGURE_TRACE_COUNT];
 };
+// One native updateSyncFrameTemplate() call after disabled configuration.
+// Input uses ConfigureRequest's inspect/run operations; repeated run returns
+// the saved result. No raw template bytes, addresses, or host clock are exposed.
+// encoded_length describes a CPU-only specimen with a synthetic clock, not TX.
+struct ItlAwdlNativeTemplateResponse {
+    ItlAwdlNativeConfigureResponse call;
+    uint32_t template_length, template_revision, tlv_count, encoded_length;
+    uint32_t tlv_kinds[8];
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -228,6 +237,8 @@ static_assert(sizeof(ItlAwdlNativeBSDResponse) == 112, "native BSD response ABI"
 static_assert(ItlAwdlNativeConfigure == 26, "append-only native configure ABI");
 static_assert(sizeof(ItlAwdlNativeConfigureRequest) == 16, "native configure request ABI");
 static_assert(sizeof(ItlAwdlNativeConfigureResponse) == 312, "native configure response ABI");
+static_assert(ItlAwdlNativeTemplate == 27, "append-only native template ABI");
+static_assert(sizeof(ItlAwdlNativeTemplateResponse) == 360, "native template response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
 static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
 static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");

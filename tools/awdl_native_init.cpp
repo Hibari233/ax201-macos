@@ -216,11 +216,7 @@ static int configureInvalidRequests(io_connect_t client) {
     return failed ? 1 : 0;
 }
 
-static int configureRun(io_connect_t client, uint32_t operation) {
-    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
-    ItlAwdlNativeConfigureResponse out = {};
-    auto result = configureInvoke(client, r, out);
-    if (result) { fprintf(stderr, "Native configure request: 0x%x\n", result); return 1; }
+static bool printNativeCall(const ItlAwdlNativeConfigureResponse &out) {
     static const char *names[] = {
 #define ITL_NATIVE_REQUEST(name, type) #name,
 #define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) #name,
@@ -236,7 +232,7 @@ static int configureRun(io_connect_t client, uint32_t operation) {
     FIELD(interface_enabled); FIELD(tx_enabled); FIELD(rx_enabled); FIELD(bsd_present);
 #undef FIELD
     printf("\"registry_id\":%llu,\"trace\":[", (unsigned long long)out.registry_id);
-    bool valid = !out.interface_enabled && !out.tx_enabled && !out.rx_enabled;
+    bool valid = !out.interface_enabled && !out.tx_enabled && !out.rx_enabled && !out.bsd_present;
     for (unsigned i = 0; i < out.trace_count; ++i) {
         const auto &entry = out.trace[i];
         const bool known = entry.vptr_offset >= 0xfa0 && entry.vptr_offset <= 0x1190 &&
@@ -245,10 +241,72 @@ static int configureRun(io_connect_t client, uint32_t operation) {
         printf("%s{\"vptr_offset\":%u,\"method\":\"%s\",\"result\":%u}", i ? "," : "",
             entry.vptr_offset, known ? names[(entry.vptr_offset - 0xfa0) / 8] : "unknown", entry.result);
     }
-    printf("],\"native_configuration_verified\":false,\"native_airdrop\":false}\n");
+    printf("],\"native_configuration_verified\":false,\"native_airdrop\":false}");
+    return valid;
+}
+
+static int configureRun(io_connect_t client, uint32_t operation) {
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
+    ItlAwdlNativeConfigureResponse out = {};
+    auto result = configureInvoke(client, r, out);
+    if (result) { fprintf(stderr, "Native configure request: 0x%x\n", result); return 1; }
+    const bool valid = printNativeCall(out);
+    printf("\n");
     // Native errors are diagnostic data. A zero result with no backend calls
     // can be a no-op; neither outcome asserts successful configuration.
     return valid && (operation != ItlAwdlConfigureRun || (out.present && out.attempted)) ? 0 : 1;
+}
+
+static kern_return_t templateInvoke(io_connect_t client, const ItlAwdlNativeConfigureRequest &r,
+    ItlAwdlNativeTemplateResponse &out, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
+    size_t size = sizeof(ItlAwdlNativeTemplateResponse)) {
+    memset(&out, 0, sizeof(out));
+    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeTemplate, &r, in, &out, &size);
+    if (!result && (size != sizeof(out) || out.call.version != ITL_AWDL_ABI_VERSION ||
+        out.call.trace_count > ITL_AWDL_CONFIGURE_TRACE_COUNT || out.template_length > 512 ||
+        out.tlv_count > 512 / 3 || out.encoded_length > 628)) return kIOReturnBadArgument;
+    return result;
+}
+
+static int templateInvalidRequests(io_connect_t client) {
+    unsigned passed = 0, failed = 0;
+    auto check = [&](const char *name, kern_return_t got) {
+        if (got == kIOReturnBadArgument) ++passed;
+        else { ++failed; fprintf(stderr, "%s: 0x%x\n", name, got); }
+    };
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, ItlAwdlConfigureInspect, {0, 0}};
+    ItlAwdlNativeTemplateResponse out = {};
+    check("short input", templateInvoke(client, r, out, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeTemplate,
+        &out, sizeof(out), nullptr, nullptr));
+    check("short output", templateInvoke(client, r, out, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", templateInvoke(client, r, out)); r.version = 1;
+    r.operation = 2; check("operation", templateInvoke(client, r, out)); r.operation = 0;
+    r.reserved[0] = 1; check("reserved0", templateInvoke(client, r, out)); r.reserved[0] = 0;
+    r.reserved[1] = 1; check("reserved1", templateInvoke(client, r, out));
+    printf("{\"invalid_template_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
+    return failed ? 1 : 0;
+}
+
+static int templateRun(io_connect_t client, uint32_t operation) {
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
+    ItlAwdlNativeTemplateResponse out = {};
+    auto result = templateInvoke(client, r, out);
+    if (result) { fprintf(stderr, "Native template request: 0x%x\n", result); return 1; }
+    printf("{\"call\":");
+    const bool valid = printNativeCall(out.call);
+    printf(",\"template_length\":%u,\"template_revision\":%u,\"tlv_count\":%u,"
+           "\"encoded_length\":%u,\"tlv_kinds\":[", out.template_length, out.template_revision,
+           out.tlv_count, out.encoded_length);
+    bool comma = false;
+    for (unsigned i = 0; i < 256; ++i) {
+        if (!(out.tlv_kinds[i / 32] & (uint32_t(1) << (i % 32)))) continue;
+        printf("%s%u", comma ? "," : "", i); comma = true;
+    }
+    printf("],\"synthetic_clock\":true,\"rf_transmitted\":false,\"native_airdrop\":false}\n");
+    // A native producer error remains diagnostic data. The harness must
+    // independently require a successful backend call and nonzero encoding.
+    return valid && (operation != ItlAwdlConfigureRun || (out.call.present && out.call.attempted)) ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
@@ -262,8 +320,10 @@ int main(int argc, char **argv) {
     const bool session = argc == 3 && !strcmp(argv[1], "session");
     const bool configureSelftest = argc == 2 && !strcmp(argv[1], "configure-selftest");
     const bool configure = argc == 3 && !strcmp(argv[1], "configure");
+    const bool templateSelftest = argc == 2 && !strcmp(argv[1], "template-selftest");
+    const bool templateRequest = argc == 3 && !strcmp(argv[1], "template");
     uint32_t configureOperation = ItlAwdlConfigureInspect;
-    if (configure) {
+    if (configure || templateRequest) {
         if (!strcmp(argv[2], "run")) configureOperation = ItlAwdlConfigureRun;
         else if (strcmp(argv[2], "status")) configureOperation = 2;
     }
@@ -275,7 +335,8 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest) || (configure && configureOperation > ItlAwdlConfigureRun) ||
+         !configure && !configureSelftest && !templateRequest && !templateSelftest) ||
+        ((configure || templateRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
@@ -285,6 +346,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
                         "       awdl_native_init session-selftest | session status|create|retire\n"
                         "       awdl_native_init configure-selftest | configure status|run\n"
+                        "       awdl_native_init template-selftest | template status|run\n"
                         "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
         return 2;
     }
@@ -308,6 +370,8 @@ int main(int argc, char **argv) {
     if (sessionSelftest) { int code = sessionInvalidRequests(client); IOServiceClose(client); return code; }
     if (configureSelftest) { int code = configureInvalidRequests(client); IOServiceClose(client); return code; }
     if (configure) { int code = configureRun(client, configureOperation); IOServiceClose(client); return code; }
+    if (templateSelftest) { int code = templateInvalidRequests(client); IOServiceClose(client); return code; }
+    if (templateRequest) { int code = templateRun(client, configureOperation); IOServiceClose(client); return code; }
     if (session) { int code = sessionRun(client, operation); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};

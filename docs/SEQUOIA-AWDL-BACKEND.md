@@ -662,6 +662,33 @@ and cleanup contracts during bounded initialization on 24H32. It did not call
 the native peer manager's template producer or enable synchronization; see
 `VALIDATION.md` for the exact runtime scope.
 
+The appended root-only `template` diagnostic calls the native
+`updateSyncFrameTemplate(bool)` once after successful disabled configuration.
+The 24H32 function returns `IOReturn`; its only driver ioctl is the template
+setter. Its builders require the P2P supervisor and real-time manager that
+successful native `initWithInterface` creates. The probe reuses that retained
+manager, stays under the controller gate, refuses the native work-queue thread,
+and rejects missing configuration, BSD publication, registered transport or an
+enabled interface. It neither enables synchronization nor calls a TX routine.
+
+```sh
+sudo build/tools/awdl_native_init template-selftest
+sudo build/tools/awdl_native_init template status
+# After the retained session's successful configure run:
+sudo build/tools/awdl_native_init template run
+```
+
+The producer's TLVs are copied by the existing owned-template setter. A
+separate saved trace records its backend call without changing the prior
+configuration trace. Repeating `run` returns the first result, including a
+failure, without another native invocation or peer creation. The response
+contains length, revision, TLV count and kinds, never raw template bytes or
+addresses. A CPU-only integration specimen combines this actual template with
+the staged plan, role and timing counts, then decodes it to check consistency.
+Its clock and period are synthetic; `encoded_length` proves neither hardware
+timing nor RF transmission. Firmware enable, native RX and AirDrop remain
+unqualified by this diagnostic. It is not an arbitrary template-input API.
+
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
 at `0xffffff8002988078` returns a full `IOReturn`, preserving the copy/registration
 status in the 32-bit return register. The old `bool` declaration reverses the

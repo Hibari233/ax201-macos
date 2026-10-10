@@ -15,6 +15,8 @@
 // OSObject pointer; no guessed peer-manager class layout or private writes.
 extern "C" IOReturn nativeAwdlConfigure(OSObject *)
     __asm__("__ZN22IO80211AWDLPeerManager9configureEv");
+extern "C" IOReturn nativeAwdlUpdateTemplate(OSObject *, bool)
+    __asm__("__ZN22IO80211AWDLPeerManager23updateSyncFrameTemplateEb");
 
 namespace {
 // Native log/service detach may defer the final release until the work queue
@@ -53,8 +55,8 @@ OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 IOReturn ItlAwdlNativeInterface::backendResult(BackendIndex index, IOReturn result) {
     OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&backendCalls));
     auto loop = controller ? controller->getWorkLoop() : nullptr;
-    if (loop && loop->inGate() && configurationTracing) {
-        auto &trace = configurationResult;
+    if (loop && loop->inGate() && backendTrace) {
+        auto &trace = *backendTrace;
         if (trace.trace_count < ITL_AWDL_CONFIGURE_TRACE_COUNT)
             trace.trace[trace.trace_count++] = {0xfa0U + 8U * index, static_cast<uint32_t>(result)};
         else ++trace.trace_dropped;
@@ -465,9 +467,9 @@ IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx
                 return kIOReturnNotReady;
             saved.attempted = 1;
             saved.backend_before = object->backendCalls;
-            object->configurationTracing = true;
+            object->backendTrace = &saved;
             saved.native_result = static_cast<uint32_t>(nativeAwdlConfigure(state->peerManager));
-            object->configurationTracing = false;
+            object->backendTrace = nullptr;
             saved.backend_after = object->backendCalls;
         }
         memcpy(c->out, &saved, sizeof(*c->out));
@@ -478,6 +480,116 @@ IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx
         c->out->tx_enabled = object->transportTx && object->transportTx->isEnabled();
         c->out->rx_enabled = object->transportRx && object->transportRx->isEnabled();
         c->out->bsd_present = object->getBSDInterface() != nullptr;
+        return kIOReturnSuccess;
+    }, &call);
+}
+
+IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeTemplateResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlConfigureRun || request->reserved[0] || request->reserved[1])
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->call.version = ITL_AWDL_ABI_VERSION;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; IOWorkLoop *loop;
+        const ItlAwdlNativeConfigureRequest *request; ItlAwdlNativeTemplateResponse *out;
+    } call = {parent, radio, gate->getWorkLoop(), request, out};
+    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        if (c->parent->isInactive()) return kIOReturnNotReady;
+        ItlAwdlStatusResponse status = {};
+        auto result = c->radio->awdlCommand(c->parent, ItlAwdlStatus, nullptr, &status);
+        if (result) return result;
+        if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle) return kIOReturnBusy;
+        auto object = c->parent->nativeAwdlInterface;
+        if (!object) return c->request->operation == ItlAwdlConfigureInspect ?
+            kIOReturnSuccess : kIOReturnNotReady;
+        if (c->parent->getAwdlInterface() != object || object->isInactive() ||
+            object->resourcesDisposed || !object->startAttempted || object->getWorkLoop() != c->loop)
+            return kIOReturnNotReady;
+        auto &saved = object->templateResult;
+        auto &trace = saved.call;
+        if (c->request->operation == ItlAwdlConfigureRun && !trace.attempted) {
+            if (object->bsdPublishRequested || object->getBSDInterface() ||
+                object->transportRegistered || object->isInterfaceEnabled()) return kIOReturnBusy;
+            if (!object->configurationResult.attempted || object->configurationResult.native_result ||
+                !object->networkConfiguration.ready() || !object->electionIdValid ||
+                !object->electionMetricValid || !object->minimumRateValid ||
+                !object->masterChannelValid || !object->stagedSyncRoleValid ||
+                !object->presenceModeValid || !object->extensionCountsValid ||
+                !object->channelSequence.ready() || object->syncTemplate.length()) return kIOReturnNotReady;
+            auto state = object->nativeStartState();
+            auto peerClass = nativePeerClass();
+            auto queue = c->parent->getWorkQueue();
+            if (!state || !state->peerManager || !peerClass ||
+                !state->peerManager->metaCast(peerClass) || !queue || queue->onThread())
+                return kIOReturnNotReady;
+            // A successful native initWithInterface requires an initialized
+            // P2P supervisor and real-time manager. This exact-build producer
+            // uses those retained objects; it only builds supplementary TLVs
+            // and calls the owned-template backend, not synchronization enable.
+            trace.attempted = 1;
+            trace.backend_before = object->backendCalls;
+            object->backendTrace = &trace;
+            trace.native_result = static_cast<uint32_t>(nativeAwdlUpdateTemplate(state->peerManager, true));
+            object->backendTrace = nullptr;
+            trace.backend_after = object->backendCalls;
+            saved.template_length = object->syncTemplate.length();
+            saved.template_revision = object->syncTemplate.revision();
+            // ActionTemplate validated every TLV before owning these bytes.
+            for (size_t pos = 0; pos < saved.template_length;) {
+                const auto p = object->syncTemplate.bytes() + pos;
+                ++saved.tlv_count;
+                saved.tlv_kinds[p[0] / 32] |= uint32_t(1) << (p[0] % 32);
+                pos += 3 + ItlAwdl::le16(p + 1);
+            }
+            if (!trace.native_result && saved.template_length) {
+                // CPU-only integration specimen. The synthetic clock and
+                // period below are never passed to a radio or reported as an
+                // observed synchronization boundary. No frame bytes leave.
+                ItlAwdl::SyncActionContext context = {};
+                memcpy(context.source, object->selfAddress.ether_addr_octet, 6);
+                memset(context.destination, 0xff, 6);
+                context.clockValid = true;
+                context.phyTimeUs = context.targetTimeUs = 1000000;
+                ItlAwdl::SyncActionParameters parameters = {};
+                parameters.masterChannel = parameters.nextChannel = uint8_t(object->masterChannel);
+                parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
+                parameters.actionPeriodTu = 110;
+                parameters.presence = uint8_t(object->presenceMode);
+                parameters.downCounterTu = uint16_t(16 * parameters.presence);
+                parameters.minExtension = object->extensionCounts[0];
+                parameters.maxMulticastExtension = object->extensionCounts[1];
+                parameters.maxUnicastExtension = object->extensionCounts[2];
+                parameters.maxActionExtension = object->extensionCounts[3];
+                parameters.plan = object->channelSequence.plan();
+                memcpy(parameters.master, object->stagedSyncRole.master, 6);
+                uint8_t frame[ItlAwdl::SyncActionMaxLength];
+                const auto length = object->copySyncAction(context, parameters, frame, sizeof(frame));
+                ItlAwdl::ActionInfo action = {};
+                ItlAwdl::SyncAnnouncement decoded = {};
+                if (length && ItlAwdl::parseAction(frame, length, &action) == ItlAwdl::ParseResult::Valid &&
+                    action.tlv_count == saved.tlv_count + 1 &&
+                    ItlAwdl::parseSchedule(frame, length, &decoded) == ItlAwdl::ScheduleResult::Valid &&
+                    ItlAwdl::equalChannelPlan(decoded.plan, parameters.plan) &&
+                    ItlAwdl::equalMac(decoded.master, parameters.master)) saved.encoded_length = uint32_t(length);
+            }
+        }
+        memcpy(c->out, &saved, sizeof(*c->out));
+        auto &snapshot = c->out->call;
+        snapshot.version = ITL_AWDL_ABI_VERSION;
+        snapshot.present = 1;
+        snapshot.registry_id = object->getRegistryEntryID();
+        snapshot.interface_enabled = object->isInterfaceEnabled();
+        snapshot.tx_enabled = object->transportTx && object->transportTx->isEnabled();
+        snapshot.rx_enabled = object->transportRx && object->transportRx->isEnabled();
+        snapshot.bsd_present = object->getBSDInterface() != nullptr;
         return kIOReturnSuccess;
     }, &call);
 }
@@ -981,8 +1093,9 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
     backendCalls = peerCreationCalls = partialCleanups = 0;
-    configurationTracing = false;
+    backendTrace = nullptr;
     bzero(&configurationResult, sizeof(configurationResult));
+    bzero(&templateResult, sizeof(templateResult));
     transportPool = nullptr;
     transportTx = nullptr;
     transportRx = nullptr;
@@ -1253,7 +1366,7 @@ IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
 void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concrete,
     ItlAwdlNativeInitResponse *out) {
     const uint32_t callsBefore = concrete->backendCalls;
-    concrete->configurationTracing = true;
+    concrete->backendTrace = &concrete->configurationResult;
     IO80211AWDLProtocol *object = concrete;
     // Exercise virtual dispatch through the native base type. Unknown request
     // extents stay opaque: these methods must not dereference even one byte.
@@ -1662,7 +1775,7 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         trace.trace[0].vptr_offset != 0xfa0 || trace.trace[0].result != kIOReturnBadArgument ||
         trace.trace[1].vptr_offset != 0xfa0 || trace.trace[1].result != kIOReturnUnsupported)
         ++out->method_failures;
-    concrete->configurationTracing = false;
+    concrete->backendTrace = nullptr;
     bzero(&concrete->configurationResult, sizeof(concrete->configurationResult));
 }
 

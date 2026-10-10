@@ -775,3 +775,27 @@ backend calls and no BSD interface. WPA2 router pings passed 12/12; GPU, display
 and power checks passed. This qualifies disabled configuration only: no native
 RF synchronization, peer discovery or transfer occurred. The later election
 metric/minimum-rate implementation is not covered by this installed result.
+
+## Election metric and minimum rate accepted — 2026-10-10
+
+Source `f9c37d98338cce85987b19056c2fded8ad27270c` (revision 32):
+
+- Binary SHA-256: `688e373628a070c31c8aa52e469d5743b427a2c18a285459804a32113bccf8b6`
+- Loaded UUID: `2C202A9B-7214-3969-95C3-F3B3A84B1738`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38051090108)
+  passed all three jobs. The native ABI fixture and concrete 560-slot interface
+  comparison passed locally. Installation verified a revision 31 rollback.
+
+All 384 initialization contracts passed, including the corrected 12-byte metric
+and eight-byte rate structures, full-width metric preservation, supported OFDM
+rates, malformed requests, unset reads and rejected-update preservation.
+The single native configuration returned zero after eleven calls: all ten
+configuration setters succeeded, while the cache-size getter remained
+unsupported. Staged values were election metric 65 and minimum rate 12 Mbps.
+Two repeated requests returned the saved trace without new backend calls.
+
+Four subsequent samples over 20 seconds retained one unpublished manager with
+eleven backend calls. WPA2 router pings passed 12/12, and before/after GPU,
+display and power checks passed. Radio synchronization, native packet delivery,
+discovery and AirDrop transfers remain untested. In particular, this result
+does not cover the later native template-producer diagnostic.
