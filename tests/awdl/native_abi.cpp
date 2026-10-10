@@ -3,6 +3,17 @@
 #include <Airport/Apple80211.h>
 #include <Airport/macOS15/IO80211AWDLProtocol.h>
 
+// 24H32 ioctl length checks and native caller/backend accesses were audited
+// independently. These would catch the old 20-byte/8-byte legacy declarations.
+static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "Sequoia sync params length");
+static_assert(__offsetof(apple80211_awdl_sync_params, unknown_14) == 0x14, "Sequoia sync params tail");
+static_assert(sizeof(apple80211_awdl_sync_state) == 0x18, "Sequoia sync state length");
+static_assert(__offsetof(apple80211_awdl_sync_state, opaque_08) == 8, "Sequoia sync state tail");
+static_assert(sizeof(apple80211_awdl_sync_enabled) == 12, "Sequoia sync enable extent");
+static_assert(__offsetof(apple80211_awdl_sync_enabled, enabled) == 8, "Sequoia sync enabled field");
+static_assert(sizeof(apple80211_awdl_sync_frame_template) == 16, "Sequoia frame template extent");
+static_assert(__offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "Sequoia template pointer");
+
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)
 public:

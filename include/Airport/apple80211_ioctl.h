@@ -1039,6 +1039,12 @@ struct apple80211_awdl_extension_state_machine_parameter {
 struct apple80211_awdl_sync_state {
     uint32_t    version;
     uint32_t    state;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // Modified 2026-10-10: Sequoia 24H32 requires an exact 24-byte ioctl.
+    // The peer manager also writes six bytes at offset 8. Meanings of the
+    // remaining fields are not verified; do not treat this as a full schema.
+    uint8_t     opaque_08[16];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_sync_params {
@@ -1047,6 +1053,10 @@ struct apple80211_awdl_sync_params {
     uint32_t    availability_window_period;
     uint32_t    extension_length;
     uint32_t    synchronization_frame_period;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // Modified 2026-10-10: both the 24H32 getter and setter access this word.
+    uint32_t    unknown_14;
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_cap {
