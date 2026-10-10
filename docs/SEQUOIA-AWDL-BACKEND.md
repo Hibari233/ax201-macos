@@ -56,14 +56,15 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 53 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 49 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Ten implemented methods instead receive fully sized audited structures:
+bytes. Fourteen implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
 the native 16-bit value. Master-channel set/get stage a channel from the radio's
 active map; election-RSSI set/get normalize four signed bytes. The sync-state
-setter owns a disabled role descriptor. Invalid updates preserve staged state. Full initialization must open
+setter owns a disabled role descriptor; presence and extension getters/setters
+retain the associated timing parameters. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -292,11 +293,28 @@ modes/flags or malformed version/address/role leave the prior descriptor intact.
 The getter remains unsupported; staged role state is not an active radio report.
 
 The native configuration path requires earlier network, election, channel and
-RSSI state before staging a role. The synchronization encoder binds its master
+RSSI, presence and extension state before staging a role. The synchronization encoder binds its master
 address to this descriptor and its source to the interface's own address;
 mode zero prevents encoding. Init-only checks cover producer mutation, invalid
 updates, each accepted role, and mismatched master/source rejection with an
 unchanged output canary. No role is elected and no RF activity starts here.
+
+Presence mode is an eight-byte request whose value at offset 4 is accepted
+from 0 through 64, matching the inspected radio setter. The disabled backend
+owns the complete value. Its readback returns version 1; malformed versions or
+values above 64 preserve the previous selection. Wire encoding supports only
+the previously qualified geometry (powers of two through 16) and rejects other
+staged values rather than silently changing their meaning.
+
+Extension parameters occupy 20 bytes. The native request order is multicast,
+unicast, action, minimum at offsets 4, 8, 12, 16 respectively. Native firmware
+submission retains the low byte of each word, and readback zero-extends each
+byte. The backend owns these normalized values and binds all four counters and
+presence to the synchronization encoder. Unset reads preserve output; invalid
+updates preserve state. Runtime contracts cover normalization, boundary values
+and encoder rejection when a caller disagrees with the owned timing. Registry
+properties expose only these staged numeric parameters. These settings still
+require application by the future radio scheduler before operational enable.
 
 ## Native packet prototype
 

@@ -217,6 +217,68 @@ IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awd
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_PRESENCE_MODE(apple80211_awdl_presence_mode *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_PRESENCE_MODE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    // The native setter accepts the complete 0..64 range. Encoding/scheduling
+    // applies its own narrower geometry checks instead of silently clamping it.
+    if (data->version > 1 || data->mode > 64) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    presenceMode = data->mode;
+    presenceModeValid = true;
+    setProperty("AX201StagedPresenceMode", presenceMode, 32);
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_PRESENCE_MODE(apple80211_awdl_presence_mode *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_PRESENCE_MODE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !presenceModeValid) return finish(kIOReturnNotReady);
+    data->version = 1;
+    data->mode = presenceMode;
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(apple80211_awdl_extension_state_machine_parameter *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1) return finish(kIOReturnBadArgument);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
+    // 24H32 sends these four low bytes and zero-extends firmware readback.
+    const uint8_t next[] = {uint8_t(data->unk4), uint8_t(data->unk1),
+                           uint8_t(data->unk2), uint8_t(data->unk3)};
+    memcpy(extensionCounts, next, sizeof(next));
+    extensionCountsValid = true;
+    setProperty("AX201StagedExtensionCounts", extensionCounts, sizeof(extensionCounts));
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(apple80211_awdl_extension_state_machine_parameter *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive() ||
+        !networkConfiguration.ready() || !extensionCountsValid) return finish(kIOReturnNotReady);
+    data->version = 1;
+    data->unk1 = extensionCounts[1];
+    data->unk2 = extensionCounts[2];
+    data->unk3 = extensionCounts[3];
+    data->unk4 = extensionCounts[0];
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) {
     const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_STATE, r); };
     if (!data) return finish(kIOReturnBadArgument);
@@ -230,7 +292,8 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_STATE(apple80211_awdl_sync_state *
         return finish(kIOReturnUnsupported);
     if (isInterfaceEnabled()) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready() || !electionIdValid || !masterChannelValid ||
-        !electionRssiThresholdsValid) return finish(kIOReturnNotReady);
+        !electionRssiThresholdsValid || !presenceModeValid || !extensionCountsValid)
+        return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 24, "24H32 synchronization-role request");
     // Own the requested role, not padding or a producer's stack. The separate
     // synchronization-enable backend must apply it before reporting radio up.
@@ -313,7 +376,12 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
         !electionIdValid || !masterChannelValid || parameters.masterChannel != masterChannel ||
         !stagedSyncRoleValid || stagedSyncRole.operation_mode != 1 ||
         !ItlAwdl::equalMac(parameters.master, stagedSyncRole.master) ||
-        !ItlAwdl::equalMac(context.source, selfAddress.ether_addr_octet)) return 0;
+        !ItlAwdl::equalMac(context.source, selfAddress.ether_addr_octet) ||
+        !presenceModeValid || parameters.presence != presenceMode || !extensionCountsValid ||
+        parameters.minExtension != extensionCounts[0] ||
+        parameters.maxMulticastExtension != extensionCounts[1] ||
+        parameters.maxUnicastExtension != extensionCounts[2] ||
+        parameters.maxActionExtension != extensionCounts[3]) return 0;
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
@@ -784,6 +852,10 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     electionRssiThresholdsValid = false;
     stagedSyncRole = {};
     stagedSyncRoleValid = false;
+    presenceMode = 0;
+    presenceModeValid = false;
+    bzero(extensionCounts, sizeof(extensionCounts));
+    extensionCountsValid = false;
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -829,6 +901,12 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     stagedSyncRole = {};
     stagedSyncRoleValid = false;
     removeProperty("AX201StagedSyncRole");
+    presenceMode = 0;
+    presenceModeValid = false;
+    bzero(extensionCounts, sizeof(extensionCounts));
+    extensionCountsValid = false;
+    removeProperty("AX201StagedPresenceMode");
+    removeProperty("AX201StagedExtensionCounts");
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -1171,6 +1249,55 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         thresholds.unk1 || thresholds.unk2 || thresholds.unk3 || thresholds.unk4 != 0xffffffbf;
     if (rssiFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->getAWDL_PRESENCE_MODE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_presence_mode presence = {0xaaaaaaaa, 0xaaaaaaaa};
+    ++out->methods_checked;
+    if (object->getAWDL_PRESENCE_MODE(&presence) != kIOReturnNotReady ||
+        presence.version != 0xaaaaaaaa || presence.mode != 0xaaaaaaaa) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_PRESENCE_MODE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    bool presenceFailed = false;
+    const uint32_t presenceModes[] = {0U, 3U, 64U, 4U};
+    for (uint32_t mode : presenceModes) {
+        presence = {0, mode};
+        presenceFailed |= object->setAWDL_PRESENCE_MODE(&presence) != kIOReturnSuccess;
+        presence = {0xaaaaaaaa, 0xaaaaaaaa};
+        presenceFailed |= object->getAWDL_PRESENCE_MODE(&presence) != kIOReturnSuccess ||
+            presence.version != 1 || presence.mode != mode;
+    }
+    presence = {1, 65};
+    presenceFailed |= object->setAWDL_PRESENCE_MODE(&presence) != kIOReturnBadArgument;
+    presence = {2, 1};
+    presenceFailed |= object->setAWDL_PRESENCE_MODE(&presence) != kIOReturnBadArgument;
+    presenceFailed |= object->getAWDL_PRESENCE_MODE(&presence) != kIOReturnSuccess || presence.mode != 4;
+    if (presenceFailed) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_extension_state_machine_parameter extensions;
+    memset(&extensions, 0xa5, sizeof(extensions));
+    auto untouchedExtensions = extensions;
+    ++out->methods_checked;
+    if (object->getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnNotReady ||
+        memcmp(&extensions, &untouchedExtensions, sizeof(extensions))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    extensions = {0, 0x123456ff, 0x80, 0x17f, 0x100};
+    bool extFailed = object->setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnSuccess;
+    memset(&extensions, 0xa5, sizeof(extensions));
+    extFailed |= object->getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnSuccess ||
+        extensions.version != 1 || extensions.unk1 != 255 || extensions.unk2 != 128 ||
+        extensions.unk3 != 127 || extensions.unk4;
+    auto savedExtensions = extensions;
+    extensions = {2, 0, 0, 0, 0};
+    extFailed |= object->setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnBadArgument;
+    extFailed |= object->getAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnSuccess ||
+        memcmp(&extensions, &savedExtensions, sizeof(extensions));
+    extensions = {1, 0, 0, 0, 0};
+    extFailed |= object->setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(&extensions) != kIOReturnSuccess;
+    if (extFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_STATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     ++out->methods_checked;
     apple80211_awdl_sync_state role = {};
@@ -1254,6 +1381,12 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     context.source[5] ^= 1;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     context.source[5] ^= 1;
+    parameters.presence = parameters.plan.step_aw = 2;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    parameters.presence = parameters.plan.step_aw = 4;
+    parameters.minExtension = 1;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    parameters.minExtension = 0;
     role = savedRole;
     role.operation_mode = 0;
     failed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
@@ -1270,6 +1403,12 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     concrete->stagedSyncRole = {};
     concrete->stagedSyncRoleValid = false;
     concrete->removeProperty("AX201StagedSyncRole");
+    concrete->presenceMode = 0;
+    concrete->presenceModeValid = false;
+    bzero(concrete->extensionCounts, sizeof(concrete->extensionCounts));
+    concrete->extensionCountsValid = false;
+    concrete->removeProperty("AX201StagedPresenceMode");
+    concrete->removeProperty("AX201StagedExtensionCounts");
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

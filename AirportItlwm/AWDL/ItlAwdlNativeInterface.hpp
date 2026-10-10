@@ -88,6 +88,10 @@ private:
     bool electionRssiThresholdsValid;
     apple80211_awdl_sync_state stagedSyncRole;
     bool stagedSyncRoleValid;
+    uint32_t presenceMode;
+    bool presenceModeValid;
+    uint8_t extensionCounts[4]; // minimum, multicast, unicast, action
+    bool extensionCountsValid;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;

@@ -60,6 +60,10 @@ static_assert(__offsetof(apple80211_awdl_election_rssi_thresholds, unk4) == 16, 
 static_assert(__offsetof(apple80211_awdl_sync_state, master) == 8, "Sequoia sync master");
 static_assert(__offsetof(apple80211_awdl_sync_state, operation_mode) == 16, "Sequoia sync operation mode");
 static_assert(__offsetof(apple80211_awdl_sync_state, additional_role_flags) == 20, "Sequoia sync role flags");
+static_assert(sizeof(apple80211_awdl_presence_mode) == 8, "Sequoia presence extent");
+static_assert(__offsetof(apple80211_awdl_presence_mode, mode) == 4, "Sequoia presence offset");
+static_assert(sizeof(apple80211_awdl_extension_state_machine_parameter) == 20, "Sequoia extension extent");
+static_assert(__offsetof(apple80211_awdl_extension_state_machine_parameter, unk4) == 16, "Sequoia minimum extension");
 static_assert(__offsetof(apple80211_awdl_election_id, election_id) == 4, "Sequoia election-ID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
 static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");
