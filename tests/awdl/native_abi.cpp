@@ -2,6 +2,26 @@
 // Compile-only fixture. Never linked into or installed as a driver.
 #include <Airport/Apple80211.h>
 #include <Airport/macOS15/IO80211AWDLProtocol.h>
+#include <Airport/macOS15/IO80211NetworkPacket.h>
+
+// Force compiler vtables for every packet base, including the pool release
+// override. Compare these object-file relocations to the target's native ABI.
+#define ABI_FIXTURE(name, base) \
+    class name : public base { OSDeclareDefaultStructors(name) }; \
+    OSDefineMetaClassAndStructors(name, base)
+ABI_FIXTURE(SequoiaPacketPoolAbiTest, IOSkywalkPacketBufferPool)
+ABI_FIXTURE(SequoiaPacketAbiTest, IOSkywalkPacket)
+ABI_FIXTURE(SequoiaNetworkPacketAbiTest, IOSkywalkNetworkPacket)
+ABI_FIXTURE(SequoiaWifiPacketAbiTest, IO80211NetworkPacket)
+#undef ABI_FIXTURE
+static_assert(sizeof(SequoiaPacketPoolAbiTest) == 0xb8, "Pool fixture extent");
+static_assert(sizeof(SequoiaPacketAbiTest) == 0x70, "Packet fixture extent");
+static_assert(sizeof(SequoiaNetworkPacketAbiTest) == 0x78, "Network packet fixture extent");
+static_assert(sizeof(SequoiaWifiPacketAbiTest) == 0x78, "Wi-Fi packet fixture extent");
+static_assert(__is_same(decltype(static_cast<IOSkywalkPacketBufferPool *>(nullptr)->allocatePacket(nullptr, 0)),
+                        IOReturn), "Pool allocation returns IOReturn");
+static_assert(__is_same(decltype(static_cast<IOSkywalkPacket *>(nullptr)->prepare(nullptr, 0, 0)),
+                        IOReturn), "Packet preparation returns IOReturn");
 
 // 24H32 ioctl length checks and native caller/backend accesses were audited
 // independently. These would catch the old 20-byte/8-byte legacy declarations.

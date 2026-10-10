@@ -6,6 +6,9 @@
 //  Copyright © 2023 钟先耀. All rights reserved.
 //
 
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+#include "macOS15/IOSkywalkNetworkPacket.h"
+#else
 #ifndef IOSkywalkInterface_h
 #define IOSkywalkInterface_h
 
@@ -52,3 +55,4 @@ public:
 };
 
 #endif /* IOSkywalkInterface_h */
+#endif

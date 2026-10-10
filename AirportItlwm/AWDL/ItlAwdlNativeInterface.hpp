@@ -19,6 +19,8 @@ public:
     static IOReturn managedSession(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeSessionRequest *, ItlAwdlNativeSessionResponse *);
     static void releaseManaged(AirportItlwm *);
+    static IOReturn probePackets(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativePacketRequest *, ItlAwdlNativePacketResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;

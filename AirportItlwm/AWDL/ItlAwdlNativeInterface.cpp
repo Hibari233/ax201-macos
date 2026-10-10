@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "ItlAwdlNativeInterface.hpp"
+#include "ItlAwdlNativePacket.hpp"
 #include "AirportItlwmV2.hpp"
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
@@ -39,6 +40,53 @@ const OSMetaClass *nativePeerClass() {
 }
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
+
+IOReturn ItlAwdlNativeInterface::probePackets(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativePacketRequest *request, ItlAwdlNativePacketResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->iterations < 1 || request->iterations > 4 || request->failure > 3 || request->reserved)
+        return kIOReturnBadArgument;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate) return kIOReturnNotReady;
+    // Pool init waits for IOBSD internally; never enter an unbounded resource
+    // wait from this diagnostic while holding the wireless work queue gate.
+    auto resources = IOService::getResourceService();
+    if (!resources || !resources->getProperty("IOBSD")) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    out->pools_before = ItlAwdlNativePacketPool::metaClass->getInstanceCount();
+    out->packets_before = ItlAwdlNativePacket::metaClass->getInstanceCount();
+    if (out->pools_before || out->packets_before) return kIOReturnBusy;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; unsigned int failure;
+        ItlAwdlNativePacketResponse *out; } call = {parent, radio, request->failure, out};
+    for (uint32_t i = 0; i < request->iterations; ++i) {
+        auto result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            auto call = static_cast<Call *>(argument);
+            if (call->parent->isInactive()) return kIOReturnNotReady;
+            ItlAwdlStatusResponse status = {};
+            auto result = call->radio->awdlCommand(call->parent, ItlAwdlStatus, nullptr, &status);
+            if (result) return result;
+            if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+            if (status.session != ItlAwdlIdle || call->parent->getAwdlInterface()) return kIOReturnBusy;
+            return ItlAwdlNativePacketPool::probeCycle(call->parent, call->failure, call->out);
+        }, &call);
+        unsigned int waited = 0;
+        while ((ItlAwdlNativePacketPool::metaClass->getInstanceCount() ||
+                ItlAwdlNativePacket::metaClass->getInstanceCount()) && waited < 250) {
+            IOSleep(1);
+            ++waited;
+        }
+        out->pools_after = ItlAwdlNativePacketPool::metaClass->getInstanceCount();
+        out->packets_after = ItlAwdlNativePacket::metaClass->getInstanceCount();
+        out->last_error = static_cast<uint32_t>(result ? result :
+            (out->pools_after || out->packets_after ? kIOReturnTimeout : kIOReturnSuccess));
+        if (out->last_error) break;
+    }
+    return kIOReturnSuccess;
+}
 
 bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {

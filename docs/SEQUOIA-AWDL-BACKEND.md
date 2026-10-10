@@ -180,6 +180,42 @@ backend call counts and unexpected BSD interfaces. A passing lifecycle probe
 does not establish a working radio or networking interface. There is still no
 queue/BSD registration, link enable or packet transport from this path.
 
+## Native packet prototype
+
+Selector 22 and capability bit 4096 add an isolated, root-only packet-pool
+diagnostic for AX201 / 24H32. It does not register a queue or network interface,
+create a peer manager, or transmit packets. It is excluded while the retained
+native interface or a radio diagnostic is active.
+
+The Sequoia declarations now preserve the native pool's `release()` override,
+its `0xb8` object extent, and zero-success `IOReturn` allocation/factory results.
+The native packet hierarchy is `IOCommand` → `IOSkywalkPacket` (`0x70`) →
+`IOSkywalkNetworkPacket` (`0x78`) → `IO80211NetworkPacket` (`0x78`), not an
+`IOService` with padding. The fixture checks all four classes. Unused,
+unaudited methods remain inaccessible rather than exposing guessed APIs.
+
+The concrete driver packet implements the Wi-Fi metadata accessors, including
+setters whose native base implementation panics. It resets timestamps, status,
+interface ID and PTM metadata on every new packet lease. Storing PTM metadata
+does not implement or advertise timestamp synchronization. The prototype uses
+one 2048-byte buffer per packet and no device DMA options.
+
+```
+sudo build/tools/awdl_native_packets selftest
+sudo build/tools/awdl_native_packets run 1 0 # normal CPU-only buffer lifecycle
+sudo build/tools/awdl_native_packets run 1 1 # fail first packet factory
+sudo build/tools/awdl_native_packets run 1 2 # fail fourth packet factory
+sudo build/tools/awdl_native_packets run 1 3 # fail first memory-segment factory
+```
+
+Each request permits at most four cycles. A normal cycle tests eight concurrent
+packet leases across three payload sizes (64, 1280, 1514), nonzero offsets,
+metadata round trips, bounds rejection, and completion/deallocation. Contents
+are checked after all eight buffers have been filled to detect aliasing.
+Failure injection tests partial pool disposal. Settled driver pool/packet
+instance counts must return to zero before another cycle begins. This is a
+memory/ownership test, not a networking throughput or AirDrop test.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
