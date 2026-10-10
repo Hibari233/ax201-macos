@@ -554,3 +554,43 @@ native management-buffer handoff. Native RX clock mapping, sync-event delivery,
 enabled radio scheduling, peer discovery and bidirectional AirDrop transfer
 remain unfinished. Revision 19 was built and CI-tested but was not separately
 installed; its changes are included in revision 20.
+
+## Native configuration failure traced — 2026-10-10
+
+Source `f187f37115433e8a30ddd6b00531bfa77c5d9437` (revision 23):
+
+- Binary SHA-256: `61d5b8b52ef891e6d6f0aa90fb29b1259cf9853bc2cb32b6fe2cef3566002689`
+- Loaded UUID: `0214F11B-A519-3643-B1CB-832CB7ACE023`, verified after reboot.
+  Revision 20 was backed up before the external EFI transaction.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38046330026)
+  passed all three jobs. Local UBSan passed; 1,289 native imports resolved and
+  the concrete interface matched 560 virtual slots / 63 backend methods.
+
+The init-only regression passed 384 contract checks with zero failures or
+remaining instances. It now also exercises the owned template's bounded action
+encoder, missing-clock rejection and the trace's order/capacity accounting.
+Revision 21/22 event and encoding changes are included here; those revisions
+were not separately installed. The event payload still has not been dispatched
+to the native timeline.
+
+Seven malformed configuration requests were rejected. Inspection without an
+object reported absence, and a run without a session returned not ready. One
+retained, unpublished native object was then created. Native `configure()` made
+exactly one backend call: `setAWDL_BSSID`, at slot `0x10a8`, returned
+`kIOReturnUnsupported` (`0xe00002c7`). Native configure returned the same error.
+**This is a reproduced initialization failure, not successful configuration.**
+
+Two subsequent runs from reopened clients returned the same saved trace and
+registry identity. The live backend-call count stayed at one; there was still
+one peer manager, no BSD interface, and no enabled interface or queues. The
+object remains retained for this boot; it was not torn down or recreated.
+
+WPA2 interface-bound router pings passed 12/12 around the checks. Display/power
+health assertions passed at the existing 1920×1080, 240 Hz, with unchanged
+GPU/EFI settings and zero recorded GPU I/O failures or flip-latch timeouts.
+After reboot the earlier mDNS name did not resolve; the trusted IPv4 SSH
+address worked. This was not a machine hang or evidence of AWDL discovery.
+
+There was no RF synchronization, native RX handoff, discovery or file transfer.
+Subsequent network-identifier staging code still requires its own hardware
+qualification; the revision 23 failure must not be reported as that fix passing.

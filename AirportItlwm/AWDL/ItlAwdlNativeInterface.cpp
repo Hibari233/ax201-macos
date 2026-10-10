@@ -89,6 +89,24 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_syn
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_BSSID(apple80211_awdl_bssid *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_BSSID, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    static_assert(sizeof(*data) == 16, "24H32 BSSID pair request");
+    static_assert(offsetof(apple80211_awdl_bssid, bssid) == 4, "24H32 AWDL BSSID");
+    static_assert(offsetof(apple80211_awdl_bssid, unk_mac) == 10, "24H32 companion BSSID");
+    const auto result = networkConfiguration.replace(data->version, data->bssid, data->unk_mac);
+    if (result == ItlAwdl::BssidResult::Invalid) return finish(kIOReturnBadArgument);
+    if (result == ItlAwdl::BssidResult::Unsupported) return finish(kIOReturnUnsupported);
+    // Accepted configuration is owned and used by the action encoder. A
+    // future enable transaction must apply its corresponding hardware filter.
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -156,7 +174,7 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
         resourcesDisposed || isInactive() || !syncTemplate.length()) return 0;
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
-    return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, output, capacity);
+    return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
 }
 
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
@@ -615,6 +633,7 @@ IOReturn ItlAwdlNativeInterface::probePackets(AirportItlwm *parent, ItlIwx *radi
 bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {
     syncTemplate = {};
+    networkConfiguration = {};
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -649,6 +668,7 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     if (resourcesDisposed) return;
     resourcesDisposed = true;
     syncTemplate.clear();
+    networkConfiguration.clear();
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -891,6 +911,25 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     if (object->getAWDL_SYNC_ENABLED(&enabled) || enabled.version != 1 || enabled.unk1 || enabled.enabled)
         ++out->method_failures;
     ++out->methods_checked;
+    if (object->setAWDL_BSSID(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_bssid bssid = {0, {0, 0x25, 0, 0xff, 0x94, 0x73},
+                                     {0, 0x25, 0, 0xff, 0x94, 0x74}};
+    ++out->methods_checked;
+    bool bssidFailed = object->setAWDL_BSSID(&bssid) || !concrete->networkConfiguration.ready();
+    bssid.bssid[0] = 1;
+    bssidFailed |= !ItlAwdl::equalMac(concrete->networkConfiguration.awdl(), ItlAwdl::DefaultAwdlBssid) ||
+        object->setAWDL_BSSID(&bssid) != kIOReturnBadArgument;
+    bssid.bssid[0] = 2;
+    bssidFailed |= object->setAWDL_BSSID(&bssid) != kIOReturnUnsupported;
+    bssid.bssid[0] = 0;
+    bssid.version = 2;
+    bssidFailed |= object->setAWDL_BSSID(&bssid) != kIOReturnBadArgument;
+    bssid.version = 1;
+    bssidFailed |= object->setAWDL_BSSID(&bssid) != kIOReturnSuccess ||
+        !ItlAwdl::equalMac(concrete->networkConfiguration.awdl(), ItlAwdl::DefaultAwdlBssid) ||
+        !ItlAwdl::equalMac(concrete->networkConfiguration.companion(), ItlAwdl::DefaultCompanionBssid);
+    if (bssidFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     uint8_t payload[] = {21, 2, 0, 0x10, 1};
     apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
@@ -923,6 +962,7 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     const auto length = concrete->copySyncAction(context, parameters, frame, 105);
     ItlAwdl::SyncAnnouncement decoded = {};
     failed |= length != 105 || frame[105] != 0xa5 ||
+        memcmp(frame + 16, ItlAwdl::DefaultAwdlBssid, 6) ||
         memcmp(frame + 100, expected, sizeof(expected)) ||
         ItlAwdl::parseSchedule(frame, length, &decoded) != ItlAwdl::ScheduleResult::Valid ||
         decoded.tx_delay_us != 32 || decoded.aw_period_tu != 16 || decoded.presence != 4;
@@ -930,6 +970,7 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     frame[0] = 0x5a;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     concrete->syncTemplate.clear();
+    concrete->networkConfiguration.clear();
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

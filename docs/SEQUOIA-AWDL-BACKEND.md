@@ -208,12 +208,33 @@ ordering and capacity, then clear that test trace without calling configure.
 
 Native configure can return zero without doing work when its own power state
 is zero or configuration was already attempted elsewhere. Zero is consequently
-not proof of successful configuration. In the audited native flow, the first
-fatal backend request is `setAWDL_BSSID`; the current implementation still
-returns unsupported. The trace is intended to verify which path the live
-manager takes before implementing more configuration and firmware operations.
+not proof of successful configuration. Revision 23 confirmed that its first
+fatal backend request was `setAWDL_BSSID`, returning unsupported. The trace
+identifies the next missing operation as configuration support is added.
 Normal Wi-Fi health and interface/queue-disabled state must be checked after
 the call. This diagnostic is not native AirDrop activation.
+
+## Disabled network-identifier configuration
+
+The 24H32 `setAWDL_BSSID` request is 16 bytes: a version word and two six-byte
+identifiers at offsets 4 and 10. Native default initialization and its configure
+producer independently establish the standard AWDL `00:25:00:ff:94:73` and
+companion `00:25:00:ff:94:74` pair. Version 0 from the native producer and version
+1 are accepted under the work-loop gate while the interface is disabled.
+
+The backend now validates and owns this pair. Invalid input or an unsupported
+custom pair leaves the old configuration intact. The synchronization encoder
+requires the owned configuration and reads its AWDL identifier, instead of
+emitting a hard-coded identifier regardless of whether configuration succeeded.
+Init-only contract checks cover null/version/address rejection, producer
+mutation, preserved state and the encoded frame identifier.
+
+Acceptance stages the disabled configuration; it does not create an Intel
+firmware interface, program a receive filter, or enable the companion protocol.
+The future operational-enable transaction must do that work before reporting
+readiness. The old isolated data diagnostic uses the same standard AWDL
+identifier and is not connected to the native data path. Custom identifiers,
+operational synchronization and AirDrop remain unsupported.
 
 ## Native packet prototype
 

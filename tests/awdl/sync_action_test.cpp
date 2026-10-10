@@ -21,7 +21,32 @@ int main() {
     const uint8_t version[] = {21, 2, 0, 0x10, 1};
     assert(extra.replace(version, sizeof(version)));
     uint8_t out[SyncActionMaxLength + 8]; memset(out, 0xa5, sizeof(out));
-    auto n = buildSyncAction(c, s, extra, out, sizeof(out));
+    NativeBssidConfiguration network;
+    assert(!buildSyncAction(c, s, extra, network, out, sizeof(out)));
+    for (auto byte : out) assert(byte == 0xa5);
+    uint8_t primary[6], companion[6];
+    memcpy(primary, DefaultAwdlBssid, 6); memcpy(companion, DefaultCompanionBssid, 6);
+    assert(network.replace(2, primary, companion) == BssidResult::Invalid && !network.ready());
+    assert(network.replace(0, nullptr, companion) == BssidResult::Invalid && !network.ready());
+    assert(network.replace(0, primary, nullptr) == BssidResult::Invalid && !network.ready());
+    assert(network.replace(0, primary, companion) == BssidResult::Stored && network.ready());
+    primary[0] = 1; companion[0] = 1; // Producer mutation cannot change the saved pair.
+    assert(equalMac(network.awdl(), DefaultAwdlBssid) && equalMac(network.companion(), DefaultCompanionBssid));
+    assert(network.replace(0, primary, companion) == BssidResult::Invalid);
+    primary[0] = 2; companion[0] = 0;
+    assert(network.replace(0, primary, companion) == BssidResult::Unsupported);
+    primary[0] = 0; companion[5] = primary[5];
+    assert(network.replace(0, primary, companion) == BssidResult::Invalid);
+    memset(primary, 0, 6);
+    assert(network.replace(0, primary, companion) == BssidResult::Invalid);
+    assert(equalMac(network.awdl(), DefaultAwdlBssid) && equalMac(network.companion(), DefaultCompanionBssid));
+    assert(network.replace(1, network.awdl(), network.companion()) == BssidResult::Stored);
+    auto cleared = network; cleared.clear();
+    assert(!cleared.ready() && equalMac(network.awdl(), DefaultAwdlBssid));
+    for (unsigned i = 0; i < 6; ++i) assert(!cleared.awdl()[i] && !cleared.companion()[i]);
+    assert(!buildSyncAction(c, s, extra, cleared, out, sizeof(out)));
+    for (auto byte : out) assert(byte == 0xa5);
+    auto n = buildSyncAction(c, s, extra, network, out, sizeof(out));
     assert(n == 105);
     // Independent fixed wire specimen; padding and FCS absence are deliberate.
     const uint8_t header[] = {0xd0,0,0,0,2,6,7,8,9,10,2,1,2,3,4,5,0,0x25,0,0xff,0x94,0x73,
@@ -45,15 +70,15 @@ int main() {
 
     auto rejected = [&](const SyncActionContext &bc, const SyncActionParameters &bs, const ActionTemplate &bt) {
         memset(out, 0xa5, sizeof(out));
-        assert(!buildSyncAction(bc, bs, bt, out, sizeof(out)));
+        assert(!buildSyncAction(bc, bs, bt, network, out, sizeof(out)));
         for (auto byte : out) assert(byte == 0xa5);
     };
     for (size_t capacity = 0; capacity < n; ++capacity) {
         memset(out, 0xa5, sizeof(out));
-        assert(!buildSyncAction(c, s, extra, out, capacity));
+        assert(!buildSyncAction(c, s, extra, network, out, capacity));
         for (auto byte : out) assert(byte == 0xa5);
     }
-    assert(!buildSyncAction(c, s, extra, nullptr, sizeof(out)));
+    assert(!buildSyncAction(c, s, extra, network, nullptr, sizeof(out)));
     auto bc = c; bc.clockValid = false; rejected(bc, s, extra);
     bc = c; bc.sequence = 0x1000; rejected(bc, s, extra);
     bc = c; bc.subtype = 1; rejected(bc, s, extra);
@@ -81,7 +106,7 @@ int main() {
     for (unsigned i = 9; i < sizeof(sequence); ++i) sequence[i] = 6;
     ActionTemplate seq;
     assert(seq.replace(sequence, sizeof(sequence)));
-    assert(buildSyncAction(c, s, seq, out, sizeof(out)) == 125);
+    assert(buildSyncAction(c, s, seq, network, out, sizeof(out)) == 125);
     sequence[9] = 44;
     assert(seq.replace(sequence, sizeof(sequence))); rejected(c, s, seq);
     uint8_t duplicates[50]; sequence[9] = 6;
@@ -97,7 +122,7 @@ int main() {
     s.plan.channels[5] = s.plan.operating_classes[5] = 0;
     c.sequence = 0xfff; c.subtype = 3; memset(c.destination, 0xff, 6);
     c.targetTimeUs = 0xfffffff0; c.phyTimeUs = 0x10; s.counter = 0xffff;
-    assert(buildSyncAction(c, s, extra, out, SyncActionMaxLength) == SyncActionMaxLength);
+    assert(buildSyncAction(c, s, extra, network, out, SyncActionMaxLength) == SyncActionMaxLength);
     assert(parseSchedule(out, SyncActionMaxLength, &sync) == ScheduleResult::Valid);
     assert(sync.tx_delay_us == 32 && sync.aw_counter == 0xffff && !sync.plan.channels[5]);
     assert(equalChannelPlan(sync.plan, s.plan));

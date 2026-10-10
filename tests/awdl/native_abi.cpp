@@ -12,8 +12,9 @@
 // Compile the portable encoder using kernel flags as well as the host tests.
 size_t sequoiaSyncActionCompileFixture(const ItlAwdl::SyncActionContext &context,
     const ItlAwdl::SyncActionParameters &parameters, const ItlAwdl::ActionTemplate &extra,
+    const ItlAwdl::NativeBssidConfiguration &network,
     uint8_t *output, size_t capacity) {
-    return ItlAwdl::buildSyncAction(context, parameters, extra, output, capacity);
+    return ItlAwdl::buildSyncAction(context, parameters, extra, network, output, capacity);
 }
 
 // Force compiler vtables for every packet base, including the pool release
@@ -50,6 +51,9 @@ static_assert(__is_same(decltype(static_cast<IOSkywalkPacket *>(nullptr)->prepar
 // 24H32 ioctl length checks and native caller/backend accesses were audited
 // independently. These would catch the old 20-byte/8-byte legacy declarations.
 static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "Sequoia sync params length");
+static_assert(sizeof(apple80211_awdl_bssid) == 16, "Sequoia BSSID pair length");
+static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
+static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");
 static_assert(__offsetof(apple80211_awdl_sync_params, unknown_14) == 0x14, "Sequoia sync params tail");
 static_assert(sizeof(apple80211_awdl_sync_state) == 0x18, "Sequoia sync state length");
 static_assert(__offsetof(apple80211_awdl_sync_state, opaque_08) == 8, "Sequoia sync state tail");

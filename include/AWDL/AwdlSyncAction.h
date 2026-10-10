@@ -3,6 +3,7 @@
 // and Open Wireless Link frame.h. This codec never submits a radio packet.
 #pragma once
 #include "AwdlActionTemplate.h"
+#include "AwdlNativeBssid.h"
 #include "AwdlSchedule.h"
 
 namespace ItlAwdl {
@@ -51,8 +52,9 @@ inline bool equalChannelPlan(const ChannelPlan &a, const ChannelPlan &b) {
 // Channel/operating-class bytes are encoded, not permission to use them; the
 // scheduler must independently validate the live firmware regulatory map.
 inline size_t buildSyncAction(const SyncActionContext &context, const SyncActionParameters &sync,
-                              const ActionTemplate &supplement, uint8_t *out, size_t capacity) {
-    if (!out || !context.clockValid || !unicastMac(context.source) ||
+                              const ActionTemplate &supplement, const NativeBssidConfiguration &network,
+                              uint8_t *out, size_t capacity) {
+    if (!out || !network.ready() || !context.clockValid || !unicastMac(context.source) ||
         !syncActionDestination(context.destination) || equalMac(context.source, context.destination) ||
         (context.subtype != 0 && context.subtype != 3) || context.sequence > 0xfff ||
         !unicastMac(sync.master) || !sync.awPeriodTu || sync.awPeriodTu > 1024 ||
@@ -93,7 +95,7 @@ inline size_t buildSyncAction(const SyncActionContext &context, const SyncAction
     // failures and output/input overlap cannot leave a half-updated MPDU.
     uint8_t frame[SyncActionMaxLength] = {};
     frame[0] = 0xd0;
-    const uint8_t bssid[6] = {0, 0x25, 0, 0xff, 0x94, 0x73};
+    const auto bssid = network.awdl();
     for (unsigned i = 0; i < 6; ++i) {
         frame[4 + i] = context.destination[i];
         frame[10 + i] = context.source[i];

@@ -79,6 +79,7 @@ private:
     bool configurationTracing;
     ItlAwdlNativeConfigureResponse configurationResult;
     ItlAwdl::ActionTemplate syncTemplate;
+    ItlAwdl::NativeBssidConfiguration networkConfiguration;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;
