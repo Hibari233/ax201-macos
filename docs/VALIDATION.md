@@ -307,3 +307,44 @@ The diagnostic object was retired at the end; nothing starts it at boot.
 Report hardware results with the source commit, binary hash, OS build, adapter
 PCI ID, AP security/channel configuration, exact steps and failures as well as
 successes. Keep identifiable network information out of public reports.
+
+## Native packet-pool qualification — 2026-10-10
+
+Source `5c0c21b46ccf2649f96e6f5732742d9f8dea64d7`, AX201 / Sequoia 15.8.1
+24H32:
+
+- Binary SHA-256: `12bb4004cfa8dea313a23ef4783a24d611bb0074533c6fa48b369512b5163b9c`
+- Loaded UUID: `9BF4CFBC-2A81-3731-AF0E-8E925E445462`; both loaded UUID and
+  external EFI binary hash were verified after reboot.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38037038430)
+  passed Linux sanitizer tests and both Sequoia variants (AWDL: 78 sources).
+- Compile fixtures matched 235 packet/pool virtual slots across four native
+  classes. Actual driver packet/pool classes matched 119 slots including 15
+  overrides. The native AWDL interface still matched its 560 checked slots and
+  63 backend methods. These checks establish layout, not networking behavior.
+
+The root-only CPU memory test passed eight malformed-request checks, nine
+normal pool cycles and 15 injected-failure cycles (five each at the first
+packet, fourth packet and first memory-segment factory). The normal cycles
+completed 216 packet allocations, preparations, pattern checks and returns;
+205,776 bytes were compared across simultaneous packet leases. All 432 metadata
+checks and 216 bounds rejections passed. Every settled pool/packet instance
+count returned to zero, including after partial initialization failures.
+Non-root user-client access was denied after a working root positive control.
+
+The kernel expanded the requested 64-packet pool to 5,824 packet objects and
+728 segment objects on this target. The requested count is therefore **not**
+an actual pool size limit. The test reports these factory counts and does not
+assume that the kernel keeps the requested counts. Its payload work remains
+bounded to eight simultaneous leases and three lengths per normal cycle.
+
+All 15 interface-bound WPA2 router pings passed around the memory tests. No new
+kernel panic report appeared. Final health checks confirmed the existing
+1920×1080 at 240 Hz configuration, display/GPU hashes and power settings, zero
+GPU I/O failures and zero flip-latch timeouts. This is configuration and
+counter evidence, not a new visual desktop confirmation.
+
+No native peer manager, queue, BSD interface or radio transmission was created
+by this test, and the native peer-manager boot latch remains unused. PTM fields
+were storage round-trip tests only. Queue ownership, native AWDL transport,
+peer discovery and AirDrop file transfers remain unqualified.
