@@ -217,6 +217,34 @@ IOReturn ItlAwdlNativeInterface::getAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awd
     return finish(kIOReturnSuccess);
 }
 
+IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_STATE, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (data->version > 1 || data->state < 1 || data->state > 3 ||
+        !ItlAwdl::unicastMac(data->master)) return finish(kIOReturnBadArgument);
+    // Only the ordinary operation modes with no extra role flags are audited.
+    if (data->operation_mode > 1 || data->additional_role_flags)
+        return finish(kIOReturnUnsupported);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (!networkConfiguration.ready() || !electionIdValid || !masterChannelValid ||
+        !electionRssiThresholdsValid) return finish(kIOReturnNotReady);
+    static_assert(sizeof(*data) == 24, "24H32 synchronization-role request");
+    // Own the requested role, not padding or a producer's stack. The separate
+    // synchronization-enable backend must apply it before reporting radio up.
+    apple80211_awdl_sync_state next = {};
+    next.version = 1;
+    next.state = data->state;
+    memcpy(next.master, data->master, sizeof(next.master));
+    next.operation_mode = data->operation_mode;
+    stagedSyncRole = next;
+    stagedSyncRoleValid = true;
+    setProperty("AX201StagedSyncRole", next.state, 32);
+    return finish(kIOReturnSuccess);
+}
+
 IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeConfigureResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -282,7 +310,10 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
         resourcesDisposed || isInactive() || !syncTemplate.length() ||
-        !electionIdValid || !masterChannelValid || parameters.masterChannel != masterChannel) return 0;
+        !electionIdValid || !masterChannelValid || parameters.masterChannel != masterChannel ||
+        !stagedSyncRoleValid || stagedSyncRole.operation_mode != 1 ||
+        !ItlAwdl::equalMac(parameters.master, stagedSyncRole.master) ||
+        !ItlAwdl::equalMac(context.source, selfAddress.ether_addr_octet)) return 0;
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
@@ -751,6 +782,8 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     masterChannelValid = false;
     bzero(electionRssiThresholds, sizeof(electionRssiThresholds));
     electionRssiThresholdsValid = false;
+    stagedSyncRole = {};
+    stagedSyncRoleValid = false;
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -793,6 +826,9 @@ void ItlAwdlNativeInterface::disposeInitializedResources() {
     removeProperty("AX201StagedMasterChannel");
     bzero(electionRssiThresholds, sizeof(electionRssiThresholds));
     electionRssiThresholdsValid = false;
+    stagedSyncRole = {};
+    stagedSyncRoleValid = false;
+    removeProperty("AX201StagedSyncRole");
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -1135,6 +1171,39 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         thresholds.unk1 || thresholds.unk2 || thresholds.unk3 || thresholds.unk4 != 0xffffffbf;
     if (rssiFailed) ++out->method_failures;
     ++out->methods_checked;
+    if (object->setAWDL_SYNC_STATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    apple80211_awdl_sync_state role = {};
+    role.state = role.operation_mode = 1;
+    memcpy(role.master, concrete->selfAddress.ether_addr_octet, 6);
+    bool roleFailed = object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
+        !concrete->stagedSyncRoleValid;
+    auto savedRole = concrete->stagedSyncRole;
+    role.master[0] |= 1;
+    roleFailed |= !ItlAwdl::equalMac(savedRole.master, concrete->stagedSyncRole.master) ||
+        object->setAWDL_SYNC_STATE(&role) != kIOReturnBadArgument;
+    role = savedRole;
+    role.state = 0;
+    roleFailed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnBadArgument;
+    role = savedRole;
+    role.version = 2;
+    roleFailed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnBadArgument;
+    role = savedRole;
+    role.operation_mode = 2;
+    roleFailed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnUnsupported;
+    role = savedRole;
+    role.additional_role_flags = 1;
+    roleFailed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnUnsupported ||
+        memcmp(&savedRole, &concrete->stagedSyncRole, sizeof(savedRole));
+    for (uint32_t state = 1; state <= 3; ++state) {
+        role = savedRole;
+        role.state = state;
+        roleFailed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
+            concrete->stagedSyncRole.state != state;
+    }
+    roleFailed |= object->setAWDL_SYNC_STATE(&savedRole) != kIOReturnSuccess;
+    if (roleFailed) ++out->method_failures;
+    ++out->methods_checked;
     if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     uint8_t payload[] = {21, 2, 0, 0x10, 1};
     apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
@@ -1151,9 +1220,10 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
         concrete->syncTemplate.length() != sizeof(expected) ||
         memcmp(concrete->syncTemplate.bytes(), expected, sizeof(expected));
     // Serialize that owned snapshot through the concrete gate-checked entry.
-    // Synthetic clock/addresses stay in CPU memory; this does not call TX.
+    // The synthetic clock/frame stays in CPU memory; this does not call TX.
     ItlAwdl::SyncActionContext context = {{2, 1, 2, 3, 4, 5}, {2, 6, 7, 8, 9, 10},
                                          0, 0x123, 100032, 100000, true};
+    memcpy(context.source, concrete->selfAddress.ether_addr_octet, 6);
     ItlAwdl::SyncActionParameters parameters = {};
     parameters.nextChannel = parameters.masterChannel = 6;
     parameters.downCounterTu = 32;
@@ -1178,6 +1248,16 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     parameters.masterChannel = 149; // A caller cannot override the staged channel.
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     parameters.masterChannel = 6;
+    parameters.master[5] ^= 1;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    parameters.master[5] ^= 1;
+    context.source[5] ^= 1;
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    context.source[5] ^= 1;
+    role = savedRole;
+    role.operation_mode = 0;
+    failed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
+        concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     concrete->syncTemplate.clear();
     concrete->networkConfiguration.clear();
     concrete->electionId = 0;
@@ -1187,6 +1267,9 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     concrete->removeProperty("AX201StagedMasterChannel");
     bzero(concrete->electionRssiThresholds, sizeof(concrete->electionRssiThresholds));
     concrete->electionRssiThresholdsValid = false;
+    concrete->stagedSyncRole = {};
+    concrete->stagedSyncRoleValid = false;
+    concrete->removeProperty("AX201StagedSyncRole");
     context.clockValid = true;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0;
     if (failed) ++out->method_failures;

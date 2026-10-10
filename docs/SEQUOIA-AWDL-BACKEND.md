@@ -56,13 +56,14 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 54 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 53 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Nine implemented methods instead receive fully sized audited structures:
+bytes. Ten implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
 the native 16-bit value. Master-channel set/get stage a channel from the radio's
-active map; election-RSSI set/get normalize four signed bytes. Invalid updates preserve staged state. Full initialization must open
+active map; election-RSSI set/get normalize four signed bytes. The sync-state
+setter owns a disabled role descriptor. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -280,6 +281,22 @@ interface. Unset readback leaves the output unchanged, invalid versions leave
 all four old values unchanged, and runtime contracts exercise signed endpoints,
 upper-bit truncation, zero and producer-independent readback. No firmware
 selection algorithm is enabled by accepting these parameters.
+
+The 24H32 synchronization-state setter takes a 24-byte role descriptor: role
+at offset 4, six-byte master address at 8, operation mode at 16 and additional
+role flags at 20. The native radio maps roles 1/2/3 to elected master, follower
+and non-election master. Its synchronization-enable request is a separate
+operation. The disabled implementation now owns a normalized descriptor for
+these roles with ordinary mode 0/1 and zero additional flags. Unsupported
+modes/flags or malformed version/address/role leave the prior descriptor intact.
+The getter remains unsupported; staged role state is not an active radio report.
+
+The native configuration path requires earlier network, election, channel and
+RSSI state before staging a role. The synchronization encoder binds its master
+address to this descriptor and its source to the interface's own address;
+mode zero prevents encoding. Init-only checks cover producer mutation, invalid
+updates, each accepted role, and mismatched master/source rejection with an
+unchanged output canary. No role is elected and no RF activity starts here.
 
 ## Native packet prototype
 

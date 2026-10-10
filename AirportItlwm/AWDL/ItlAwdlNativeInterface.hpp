@@ -86,6 +86,8 @@ private:
     bool masterChannelValid;
     int32_t electionRssiThresholds[4];
     bool electionRssiThresholdsValid;
+    apple80211_awdl_sync_state stagedSyncRole;
+    bool stagedSyncRoleValid;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;

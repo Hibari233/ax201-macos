@@ -1045,10 +1045,12 @@ struct apple80211_awdl_sync_state {
     uint32_t    version;
     uint32_t    state;
 #if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
-    // Modified 2026-10-10: Sequoia 24H32 requires an exact 24-byte ioctl.
-    // The peer manager also writes six bytes at offset 8. Meanings of the
-    // remaining fields are not verified; do not treat this as a full schema.
-    uint8_t     opaque_08[16];
+    // 24H32's producer/backend agree on these fields in the 24-byte request.
+    uint8_t     master[6];
+    uint8_t     reserved_0e[2];
+    uint32_t    operation_mode;
+    uint8_t     additional_role_flags;
+    uint8_t     reserved_15[3];
 #endif
 } __attribute__((packed));
 

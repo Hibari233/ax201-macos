@@ -681,3 +681,32 @@ pings passed 12/12 and before/after GPU/display/power assertions passed. No
 radio retune, RF synchronization, native packet handoff, discovery or transfer
 occurred. The subsequent 20-byte RSSI request correction has not been tested
 by this revision's result.
+
+## Sequoia election-RSSI request accepted — 2026-10-10
+
+Source `1f412800da96354f65a131ec51ac94493dda55f3` (revision 27):
+
+- Binary SHA-256: `cdc24484508c84d011ebb2e1b29f8f335273297f3b0c3b240a8b95074d2026ea`
+- Loaded UUID: `C5100FF8-8FA5-3A86-B39A-FB6CC623AEF2`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38048905362)
+  passed all three jobs, including both Sequoia variants. The concrete interface
+  matched 560 native slots / 63 backend methods. Installation preserved a
+  verified revision 26 rollback and unchanged EFI configuration.
+
+All 384 init-only contracts passed with no failures or remaining instances.
+The RSSI checks exercise the corrected 20-byte request, signed-byte endpoints,
+upper-bit normalization, unset readback and invalid-update preservation. The
+eight malformed init checks, seven malformed configure checks and missing-session
+rejection also passed.
+
+The single native configuration accepted election-RSSI thresholds and advanced
+to eleven traced backend calls. Minimum rate, synchronization channel sequence,
+presence mode and extension parameters returned unsupported; native configure
+continued past them. The synchronization-state setter was the next fatal
+unsupported call. Repeated requests returned the saved trace without another
+backend call or peer-manager creation.
+
+The interface remained unpublished and disabled. WPA2 router pings passed 12/12,
+and before/after GPU/display/power assertions passed. No RF synchronization,
+native packet delivery, discovery or transfer was tested. Later role-descriptor
+staging is not covered by this hardware result.
