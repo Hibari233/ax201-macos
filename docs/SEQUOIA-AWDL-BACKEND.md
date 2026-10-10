@@ -177,9 +177,10 @@ before removing the radio/work queue. The retained path and the earlier real
 start probe share the same boot latch, so testing one consumes the other's
 creation opportunity. Failed injected factories and init-only tests do not.
 
-The shared radio gate excludes exclusive monitor diagnostics while this object
-exists; normal STA Wi-Fi remains the intended active radio path. That exclusion
-is not concurrent STA/AWDL scheduling. No BSD interface, packet queues, service
+The shared radio gate excludes userspace monitor diagnostics while this object
+exists; normal STA Wi-Fi remains the intended active radio path. The separate
+bounded radio qualification below owns an internal receive-only lease. Neither
+path implements concurrent STA/AWDL scheduling. No BSD interface, packet queues, service
 registration, radio activation or native AirDrop capability is enabled. Runtime
 qualification must verify stable identity across clients, disposal, denial of
 recreation, and ordinary Wi-Fi health on the exact binary.
@@ -188,6 +189,42 @@ Reports include settled native peer-manager instance counts, balanced opens, dis
 backend call counts and unexpected BSD interfaces. A passing lifecycle probe
 does not establish a working radio or networking interface. There is still no
 queue/BSD registration, link enable or packet transport from this path.
+
+## Bounded radio qualification with the retained manager
+
+Selector 28 / capability bit 131072 accepts a `BeginRequest` with channel zero,
+an owned test peer's unicast address, and a 1000–5000 ms dwell. It requires the
+exact audited build/device, a retained unpublished manager, successful native
+configuration/template checks, and STA already powered off in INIT. It refuses
+to disconnect an active STA connection itself. The staged master channel must
+be a supported diagnostic channel in the firmware's active map.
+
+```
+sudo build/tools/awdl_native_init radio-selftest
+# Explicitly power off STA before this bounded receive-only check.
+sudo build/tools/awdl_native_init radio OWNED_PEER_MAC 3000
+```
+
+The native object acquires an internal identity-based lease under the existing
+radio gate and reuses the monitor startup/stop machinery. This is a narrow
+exception to native/diagnostic exclusion: userspace cannot supply the lease
+identity, and linked mode, diagnostic TX and scheduled probes remain forbidden.
+Native lifecycle requests cannot race it. The object, controller, radio and gate
+are retained across sleeps; controller termination still cancels and restores
+the radio before disposing native resources. Every sample rechecks ownership,
+object activity and firmware generation. The independent radio timeout also
+stops listening, including when the invoking process dies. Cleanup clears the
+lease and captured diagnostic bytes.
+
+The synchronous call samples AX201's qualified GP2 register outside firmware
+sleep, checks consecutive rates against host time, and feeds coherent clock
+samples to the owned-template encoder and independent parsers. The specimen's
+AW timing is constructed, not an observed synchronization boundary. Only
+aggregate clock/RX counters and cleanup state leave the kernel; no raw frame or
+address is returned. No frame is transmitted, native RX is not invoked, and the
+peer manager/interface/queues remain disabled. This qualifies radio ownership
+and timing groundwork, not RF synchronization or an operational AirDrop link.
+Hardware results are recorded separately in `VALIDATION.md`.
 
 ## Native configuration trace
 

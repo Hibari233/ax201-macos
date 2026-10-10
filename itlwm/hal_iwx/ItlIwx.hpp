@@ -166,6 +166,9 @@ private:
     // Not part of the radio diagnostic context: radio resets must not erase
     // ownership of a native object retained by the controller.
     bool awdlNativeInterfaceActive = false;
+    // Internal receive-only qualification lease. The native probe retains this
+    // object through cleanup; userspace cannot set or supply this identity.
+    OSObject *awdlNativeRadioOwner = nullptr;
     struct {
         bool ready = false;
         bool rejected = false;

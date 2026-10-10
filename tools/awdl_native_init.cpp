@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Root-only native ABI/lifecycle checks. No radio or BSD interface activation.
+// Root-only native ABI/lifecycle checks and bounded receive-only qualification.
 #include <IOKit/IOKitLib.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <AWDL/ItlAwdlABI.h>
@@ -309,6 +309,77 @@ static int templateRun(io_connect_t client, uint32_t operation) {
     return valid && (operation != ItlAwdlConfigureRun || (out.call.present && out.call.attempted)) ? 0 : 1;
 }
 
+static kern_return_t radioInvoke(io_connect_t client, const ItlAwdlBeginRequest &r,
+    ItlAwdlNativeRadioResponse &out, size_t in = sizeof(ItlAwdlBeginRequest),
+    size_t size = sizeof(ItlAwdlNativeRadioResponse)) {
+    memset(&out, 0, sizeof(out));
+    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeRadio, &r, in, &out, &size);
+    if (!result && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION)) return kIOReturnBadArgument;
+    return result;
+}
+static int radioInvalidRequests(io_connect_t client) {
+    unsigned passed = 0, failed = 0;
+    auto check = [&](const char *name, kern_return_t got) {
+        if (got == kIOReturnBadArgument) ++passed;
+        else { ++failed; fprintf(stderr, "%s: 0x%x\n", name, got); }
+    };
+    ItlAwdlBeginRequest r = {ITL_AWDL_ABI_VERSION, 0, 1000, 0, {2,0,0,0,0,1}, {0,0}};
+    ItlAwdlNativeRadioResponse out = {};
+    check("short input", radioInvoke(client, r, out, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeRadio, &out, sizeof(out), nullptr, nullptr));
+    check("short output", radioInvoke(client, r, out, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", radioInvoke(client,r,out)); r.version = 1;
+    r.channel = 6; check("channel override", radioInvoke(client,r,out)); r.channel = 0;
+    r.dwell_ms = 999; check("short dwell", radioInvoke(client,r,out));
+    r.dwell_ms = 5001; check("long dwell", radioInvoke(client,r,out)); r.dwell_ms = 1000;
+    r.peer[0] = 1; check("multicast peer", radioInvoke(client,r,out));
+    memset(r.peer,0,6); check("zero peer", radioInvoke(client,r,out)); r.peer[0] = 2;
+    r.reserved = 1; check("reserved", radioInvoke(client,r,out)); r.reserved = 0;
+    r.padding[0] = 1; check("padding0", radioInvoke(client,r,out)); r.padding[0] = 0;
+    r.padding[1] = 1; check("padding1", radioInvoke(client,r,out));
+    printf("{\"invalid_radio_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
+    return failed ? 1 : 0;
+}
+static bool peerAddress(const char *s, uint8_t *out) {
+    if (strlen(s) != 17) return false;
+    for (unsigned i = 0; i < 6; ++i) {
+        auto hex = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        const int a = hex(s[i*3]), b = hex(s[i*3+1]);
+        if (a < 0 || b < 0 || (i < 5 && s[i*3+2] != ':')) return false;
+        out[i] = uint8_t(a*16+b);
+    }
+    return !(out[0]&1) && (out[0]|out[1]|out[2]|out[3]|out[4]|out[5]);
+}
+static int radioRun(io_connect_t client, const ItlAwdlBeginRequest &request) {
+    ItlAwdlNativeRadioResponse out = {};
+    auto result = radioInvoke(client, request, out);
+    if (result) { fprintf(stderr, "Native radio request: 0x%x\n", result); return 1; }
+    printf("{");
+#define FIELD(name) printf("\"" #name "\":%u,", out.name)
+    FIELD(version); FIELD(attempted); FIELD(radio_ready); FIELD(radio_stopped);
+    FIELD(last_error); FIELD(stop_reason); FIELD(channel); FIELD(samples);
+    FIELD(clock_valid); FIELD(rx_clock_valid); FIELD(encoded); FIELD(encoded_length);
+    FIELD(state_before); FIELD(state_after); FIELD(mode_before); FIELD(mode_after);
+    FIELD(flags_before); FIELD(flags_after); FIELD(generation_before); FIELD(generation_after);
+    FIELD(interface_enabled); FIELD(tx_enabled); FIELD(rx_enabled); FIELD(bsd_present);
+    FIELD(backend_before); FIELD(backend_after); FIELD(creation_before); FIELD(creation_after);
+#undef FIELD
+#define FIELD64(name) printf("\"" #name "\":%llu,", static_cast<unsigned long long>(out.name))
+    FIELD64(registry_id); FIELD64(rx_total); FIELD64(rx_awdl); FIELD64(rx_peer); FIELD64(rx_dropped); FIELD64(rx_invalid);
+#undef FIELD64
+    printf("\"rf_transmitted\":false,\"native_rx_handoff\":false,\"native_airdrop\":false}\n");
+    return out.attempted && out.radio_ready && out.radio_stopped && !out.last_error &&
+        out.clock_valid && out.encoded == out.clock_valid && out.encoded_length &&
+        out.mode_before == out.mode_after && out.state_before == out.state_after &&
+        out.creation_before == out.creation_after && !out.interface_enabled &&
+        !out.tx_enabled && !out.rx_enabled && !out.bsd_present ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     const bool selftest = argc == 2 && !strcmp(argv[1], "selftest");
     const bool denied = argc == 2 && !strcmp(argv[1], "denied");
@@ -322,6 +393,9 @@ int main(int argc, char **argv) {
     const bool configure = argc == 3 && !strcmp(argv[1], "configure");
     const bool templateSelftest = argc == 2 && !strcmp(argv[1], "template-selftest");
     const bool templateRequest = argc == 3 && !strcmp(argv[1], "template");
+    const bool radioSelftest = argc == 2 && !strcmp(argv[1], "radio-selftest");
+    const bool radioRequest = argc == 4 && !strcmp(argv[1], "radio");
+    ItlAwdlBeginRequest radioInput = {ITL_AWDL_ABI_VERSION,0,0,0,{},{}};
     uint32_t configureOperation = ItlAwdlConfigureInspect;
     if (configure || templateRequest) {
         if (!strcmp(argv[2], "run")) configureOperation = ItlAwdlConfigureRun;
@@ -335,7 +409,9 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest && !templateRequest && !templateSelftest) ||
+         !configure && !configureSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest) ||
+        (radioRequest && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
+                         radioInput.dwell_ms < 1000 || radioInput.dwell_ms > 5000)) ||
         ((configure || templateRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
@@ -347,6 +423,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init session-selftest | session status|create|retire\n"
                         "       awdl_native_init configure-selftest | configure status|run\n"
                         "       awdl_native_init template-selftest | template status|run\n"
+                        "       awdl_native_init radio-selftest | radio OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
         return 2;
     }
@@ -372,6 +449,8 @@ int main(int argc, char **argv) {
     if (configure) { int code = configureRun(client, configureOperation); IOServiceClose(client); return code; }
     if (templateSelftest) { int code = templateInvalidRequests(client); IOServiceClose(client); return code; }
     if (templateRequest) { int code = templateRun(client, configureOperation); IOServiceClose(client); return code; }
+    if (radioSelftest) { int code = radioInvalidRequests(client); IOServiceClose(client); return code; }
+    if (radioRequest) { int code = radioRun(client, radioInput); IOServiceClose(client); return code; }
     if (session) { int code = sessionRun(client, operation); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};

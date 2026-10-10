@@ -39,7 +39,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 131071; // Adds one-shot native configuration tracing. No native AirDrop.
+            out->capabilities = 262143; // Adds retained native RX/clock qualification. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -156,9 +156,12 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     if (!r || !owner || r->version != ITL_AWDL_ABI_VERSION || r->reserved ||
         r->padding[0] || r->padding[1] || r->dwell_ms < 100 || r->dwell_ms > ITL_AWDL_MAX_DWELL_MS ||
         !ItlAwdl::unicastMac(r->peer)) return kIOReturnBadArgument;
-    // A retained native object and exclusive radio diagnostics are alternative
-    // development paths. Both change this guard under the same command gate.
-    if (awdlNativeInterfaceActive) return kIOReturnBusy;
+    // A retained native object excludes all userspace radio diagnostics. Only
+    // its internal, receive-only qualification lease may own the monitor.
+    // It cannot use linked/data mode, TX probes or the diagnostic scheduler.
+    if ((awdlNativeInterfaceActive && owner != awdlNativeRadioOwner) ||
+        (awdlNativeRadioOwner && (owner != awdlNativeRadioOwner || linked || data)))
+        return kIOReturnBusy;
     uint32_t channel = r->channel;
     if (linked) {
         if (channel) return kIOReturnBadArgument;
@@ -346,6 +349,7 @@ void ItlIwx::awdlFinishLinkedStop() {
 }
 
 IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled) {
+    if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
     if (awdl.linked || bool(awdl.dataStatus.enabled) != data) return kIOReturnUnsupported;
@@ -469,6 +473,7 @@ IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
 }
 
 IOReturn ItlIwx::awdlRun(OSObject *owner, const ItlAwdlRunRequest *request) {
+    if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     if (!request || request->version != ITL_AWDL_ABI_VERSION || request->reserved[0] ||
         request->reserved[1] || request->mode < ItlAwdlTestWake || request->mode > ItlAwdlTestHop)
         return kIOReturnBadArgument;
@@ -766,6 +771,7 @@ void ItlIwx::awdlDetach() {
         self->awdlStop(ItlAwdlDetached);
         self->awdl.ready = false;
         self->awdl.owner = nullptr;
+        self->awdlNativeRadioOwner = nullptr;
         if (self->awdl.timer) {
             self->awdl.timer->cancelTimeout();
             self->getMainWorkLoop()->removeEventSource(self->awdl.timer);

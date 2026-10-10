@@ -65,6 +65,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {nativeBSD, 0, sizeof(ItlAwdlNativeBSDRequest), 0, sizeof(ItlAwdlNativeBSDResponse)},
         {nativeConfigure, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeConfigureResponse)},
         {nativeTemplate, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeTemplateResponse)},
+        {nativeRadio, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeRadioResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -107,6 +108,12 @@ IOReturn ItlAwdlUserClient::nativeTemplate(OSObject *o, void *, IOExternalMethod
     return ItlAwdlNativeInterface::probeTemplate(self->driver, self->radio,
         static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
         static_cast<ItlAwdlNativeTemplateResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeRadio(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeRadioResponse *>(a->structureOutput));
 }
 IOReturn ItlAwdlUserClient::nativeTransport(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);

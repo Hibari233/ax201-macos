@@ -41,6 +41,7 @@ private:
     static IOReturn nativeBSD(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeConfigure(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTemplate(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn nativeRadio(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeTransport(OSObject *, void *, IOExternalMethodArguments *);
     static IOReturn nativeQueues(OSObject *, void *, IOExternalMethodArguments *);
 };

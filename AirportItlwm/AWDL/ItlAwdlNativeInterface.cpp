@@ -553,32 +553,8 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
                 // CPU-only integration specimen. The synthetic clock and
                 // period below are never passed to a radio or reported as an
                 // observed synchronization boundary. No frame bytes leave.
-                ItlAwdl::SyncActionContext context = {};
-                memcpy(context.source, object->selfAddress.ether_addr_octet, 6);
-                memset(context.destination, 0xff, 6);
-                context.clockValid = true;
-                context.phyTimeUs = context.targetTimeUs = 1000000;
-                ItlAwdl::SyncActionParameters parameters = {};
-                parameters.masterChannel = parameters.nextChannel = uint8_t(object->masterChannel);
-                parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
-                parameters.actionPeriodTu = 110;
-                parameters.presence = uint8_t(object->presenceMode);
-                parameters.downCounterTu = uint16_t(16 * parameters.presence);
-                parameters.minExtension = object->extensionCounts[0];
-                parameters.maxMulticastExtension = object->extensionCounts[1];
-                parameters.maxUnicastExtension = object->extensionCounts[2];
-                parameters.maxActionExtension = object->extensionCounts[3];
-                parameters.plan = object->channelSequence.plan();
-                memcpy(parameters.master, object->stagedSyncRole.master, 6);
                 uint8_t frame[ItlAwdl::SyncActionMaxLength];
-                const auto length = object->copySyncAction(context, parameters, frame, sizeof(frame));
-                ItlAwdl::ActionInfo action = {};
-                ItlAwdl::SyncAnnouncement decoded = {};
-                if (length && ItlAwdl::parseAction(frame, length, &action) == ItlAwdl::ParseResult::Valid &&
-                    action.tlv_count == saved.tlv_count + 1 &&
-                    ItlAwdl::parseSchedule(frame, length, &decoded) == ItlAwdl::ScheduleResult::Valid &&
-                    ItlAwdl::equalChannelPlan(decoded.plan, parameters.plan) &&
-                    ItlAwdl::equalMac(decoded.master, parameters.master)) saved.encoded_length = uint32_t(length);
+                saved.encoded_length = uint32_t(object->encodeQualificationFrame(1000000, frame, sizeof(frame)));
             }
         }
         memcpy(c->out, &saved, sizeof(*c->out));
@@ -613,6 +589,176 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     // The same gate serializes template replacement. The caller owns the
     // returned MPDU bytes and must independently qualify firmware submission.
     return ItlAwdl::buildSyncAction(context, parameters, syncTemplate, networkConfiguration, output, capacity);
+}
+
+size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *frame, size_t capacity) {
+    // An encoding specimen with a measured clock, not an observed AW boundary.
+    // Do not enqueue this constructed timing as a transmitted synchronization.
+    ItlAwdl::SyncActionContext context = {};
+    memcpy(context.source, selfAddress.ether_addr_octet, 6);
+    memset(context.destination, 0xff, 6);
+    context.clockValid = true;
+    context.phyTimeUs = context.targetTimeUs = gp2;
+    ItlAwdl::SyncActionParameters parameters = {};
+    parameters.masterChannel = parameters.nextChannel = uint8_t(masterChannel);
+    parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
+    parameters.actionPeriodTu = 110;
+    parameters.presence = uint8_t(presenceMode);
+    parameters.downCounterTu = uint16_t(16 * parameters.presence);
+    parameters.minExtension = extensionCounts[0];
+    parameters.maxMulticastExtension = extensionCounts[1];
+    parameters.maxUnicastExtension = extensionCounts[2];
+    parameters.maxActionExtension = extensionCounts[3];
+    parameters.plan = channelSequence.plan();
+    memcpy(parameters.master, stagedSyncRole.master, 6);
+    const auto length = copySyncAction(context, parameters, frame, capacity);
+    ItlAwdl::ActionInfo action = {};
+    ItlAwdl::SyncAnnouncement decoded = {};
+    return length && ItlAwdl::parseAction(frame, length, &action) == ItlAwdl::ParseResult::Valid &&
+        action.tlv_count == templateResult.tlv_count + 1 &&
+        ItlAwdl::parseSchedule(frame, length, &decoded) == ItlAwdl::ScheduleResult::Valid &&
+        ItlAwdl::equalChannelPlan(decoded.plan, parameters.plan) &&
+        ItlAwdl::equalMac(decoded.master, parameters.master) ? length : 0;
+}
+
+IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlBeginRequest *request, ItlAwdlNativeRadioResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->channel || request->reserved || request->padding[0] || request->padding[1] ||
+        request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer))
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop() || gate->getWorkLoop()->inGate()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    // Retain every object used across sleeps. Native teardown can still cancel
+    // the radio on controller stop; each subsequent gated step revalidates it.
+    parent->retain(); radio->retain(); gate->retain();
+    struct Call { AirportItlwm *parent; ItlIwx *radio; ItlAwdlNativeInterface *object;
+        const ItlAwdlBeginRequest *request; ItlAwdlNativeRadioResponse *out;
+        uint32_t phase; int generation; bool finished;
+    } call = {parent, radio, nullptr, request, out, 0, -1, false};
+    auto action = [](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        auto r = c->radio;
+        auto o = c->object;
+        auto out = c->out;
+        auto &s = r->awdl;
+        auto ic = &r->com.sc_ic;
+        if (c->phase == 0) {
+            if (c->parent->isInactive() || !s.ready) return kIOReturnNotReady;
+            if (r->pci.pa_tag->configRead16(kIOPCIConfigDeviceID) != 0x7af0 ||
+                r->com.sc_device_family != IWX_DEVICE_FAMILY_AX210) return kIOReturnUnsupported;
+            o = c->parent->nativeAwdlInterface;
+            if (!o || c->parent->getAwdlInterface() != o || o->isInactive() || o->resourcesDisposed ||
+                !o->startAttempted || o->getWorkLoop() != r->getMainWorkLoop()) return kIOReturnNotReady;
+            if (!r->awdlNativeInterfaceActive || r->awdlNativeRadioOwner || s.owner ||
+                s.session != ItlAwdlIdle || s.commandBusy || o->bsdPublishRequested ||
+                o->getBSDInterface() || o->transportRegistered || o->isInterfaceEnabled()) return kIOReturnBusy;
+            if (!o->configurationResult.attempted || o->configurationResult.native_result ||
+                !o->templateResult.call.attempted || o->templateResult.call.native_result ||
+                !o->templateResult.encoded_length || !o->masterChannelValid ||
+                (o->masterChannel != 6 && o->masterChannel != 44 && o->masterChannel != 149))
+                return kIOReturnNotReady;
+            // Do not turn off STA or change its association from this ioctl.
+            if (ic->ic_opmode != IEEE80211_M_STA || ic->ic_state != IEEE80211_S_INIT ||
+                (ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING))) return kIOReturnBusy;
+            auto state = o->nativeStartState();
+            if (!state || !state->peerManager) return kIOReturnNotReady;
+            o->retain(); c->object = o;
+            out->registry_id = o->getRegistryEntryID();
+            out->backend_before = o->backendCalls;
+            out->creation_before = o->peerCreationCalls;
+            out->state_before = ic->ic_state; out->mode_before = ic->ic_opmode;
+            out->flags_before = ic->ic_if.if_flags; out->generation_before = r->com.sc_generation;
+            out->channel = o->masterChannel;
+            ItlAwdlBeginRequest begin = *c->request;
+            begin.channel = o->masterChannel;
+            // A typed, retained in-kernel owner is the sole exception to the
+            // native/diagnostic exclusion. It cannot submit diagnostic TX.
+            r->awdlNativeRadioOwner = o;
+            out->attempted = 1;
+            auto result = r->awdlBegin(o, &begin);
+            if (result) { out->last_error = result; c->finished = true; }
+            return kIOReturnSuccess;
+        }
+        if (c->phase == 1) {
+            if (!o || c->parent->isInactive() || c->parent->nativeAwdlInterface != o ||
+                o->resourcesDisposed || o->isInactive() || !s.ready ||
+                r->awdlNativeRadioOwner != o || s.owner != o) {
+                out->last_error = kIOReturnAborted; c->finished = true; return kIOReturnSuccess;
+            }
+            if (!r->awdlActive()) {
+                if (s.stopReason != ItlAwdlExpired) out->last_error = s.lastError ? s.lastError : kIOReturnAborted;
+                c->finished = true; return kIOReturnSuccess;
+            }
+            if (s.session != ItlAwdlListening) return kIOReturnSuccess;
+            if (c->generation < 0) c->generation = r->com.sc_generation;
+            if (c->generation != r->com.sc_generation) {
+                out->last_error = kIOReturnAborted; c->finished = true; return kIOReturnSuccess;
+            }
+            out->radio_ready = 1;
+            ItlAwdlClockResponse clock = {};
+            auto result = r->awdlReadClock(&clock);
+            if (result) { out->last_error = result; c->finished = true; return kIOReturnSuccess; }
+            ++out->samples;
+            if (clock.flags & 4) ++out->rx_clock_valid;
+            if ((clock.flags & 3) == 3) {
+                ++out->clock_valid;
+                uint8_t frame[ItlAwdl::SyncActionMaxLength];
+                auto length = o->encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame));
+                if (!length) { out->last_error = kIOReturnError; c->finished = true; }
+                else { ++out->encoded; out->encoded_length = uint32_t(length); }
+            }
+            return kIOReturnSuccess;
+        }
+        // One cleanup for success, radio errors, timeout and controller stop.
+        // Snapshot only aggregate RX counters; never expose captured payloads.
+        if (o && r->awdlNativeRadioOwner == o) {
+            out->rx_total = s.rxTotal; out->rx_awdl = s.rxAwdl; out->rx_peer = s.rxPeer;
+            out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
+            if (s.owner == o && s.ready) {
+                auto result = r->awdlCommand(o, ItlAwdlEnd, nullptr, nullptr);
+                if (result && !out->last_error) out->last_error = result;
+            }
+            r->awdlNativeRadioOwner = nullptr;
+        }
+        out->stop_reason = s.stopReason;
+        out->state_after = ic->ic_state; out->mode_after = ic->ic_opmode;
+        out->flags_after = ic->ic_if.if_flags; out->generation_after = r->com.sc_generation;
+        out->radio_stopped = s.session == ItlAwdlIdle && !r->awdlNativeRadioOwner && !s.owner &&
+            ic->ic_opmode == IEEE80211_M_STA && !(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING));
+        if (o && !o->resourcesDisposed) {
+            out->backend_after = o->backendCalls; out->creation_after = o->peerCreationCalls;
+            out->interface_enabled = o->isInterfaceEnabled();
+            out->tx_enabled = o->transportTx && o->transportTx->isEnabled();
+            out->rx_enabled = o->transportRx && o->transportRx->isEnabled();
+            out->bsd_present = o->getBSDInterface() != nullptr;
+        }
+        return kIOReturnSuccess;
+    };
+    auto result = gate->runAction(action, &call);
+    if (!result && call.object) {
+        call.phase = 1;
+        // The independent radio timer also expires the lease. Sleeps happen
+        // outside the gate, allowing RX, firmware completion and power teardown.
+        for (uint32_t elapsed = 0; !call.finished && elapsed < request->dwell_ms + 100; elapsed += 20) {
+            IOSleep(20);
+            auto step = gate->runAction(action, &call);
+            if (step) { out->last_error = step; break; }
+        }
+    }
+    if (call.object) {
+        call.phase = 2;
+        auto cleanup = gate->runAction(action, &call);
+        if (cleanup && !out->last_error) out->last_error = cleanup;
+        call.object->release();
+    }
+    gate->release(); radio->release(); parent->release();
+    return result;
 }
 
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
@@ -1895,12 +2041,16 @@ void ItlAwdlNativeInterface::describeManaged(AirportItlwm *parent,
 void ItlAwdlNativeInterface::releaseManagedGated(AirportItlwm *parent) {
     auto object = parent->nativeAwdlInterface;
     if (!object) return;
+    auto radio = OSDynamicCast(ItlIwx, parent->fHalService);
+    if (radio && radio->awdlNativeRadioOwner == object) {
+        radio->awdlCommand(object, ItlAwdlEnd, nullptr, nullptr);
+        radio->awdlNativeRadioOwner = nullptr;
+    }
     parent->nativeAwdlInterface = nullptr;
     object->stop(parent);
     object->disposeInitializedResources();
     object->detach(parent);
     object->release();
-    auto radio = OSDynamicCast(ItlIwx, parent->fHalService);
     if (radio) radio->awdlNativeInterfaceActive = false;
 }
 

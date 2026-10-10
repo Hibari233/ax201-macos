@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -195,6 +195,20 @@ struct ItlAwdlNativeTemplateResponse {
     uint32_t template_length, template_revision, tlv_count, encoded_length;
     uint32_t tlv_kinds[8];
 };
+// Synchronous, receive-only native radio qualification. Input is BeginRequest:
+// channel must be zero (use staged master channel), dwell 1000..5000 ms, and
+// peer is the user's own test device. STA must already be off. The one retained
+// manager stays disabled; no native RX handoff, frame TX or BSD publication.
+struct ItlAwdlNativeRadioResponse {
+    uint32_t version, attempted, radio_ready, radio_stopped;
+    uint32_t last_error, stop_reason, channel, samples;
+    uint32_t clock_valid, rx_clock_valid, encoded, encoded_length;
+    uint32_t state_before, state_after, mode_before, mode_after;
+    uint32_t flags_before, flags_after, generation_before, generation_after;
+    uint32_t interface_enabled, tx_enabled, rx_enabled, bsd_present;
+    uint32_t backend_before, backend_after, creation_before, creation_after;
+    uint64_t registry_id, rx_total, rx_awdl, rx_peer, rx_dropped, rx_invalid;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -239,6 +253,8 @@ static_assert(sizeof(ItlAwdlNativeConfigureRequest) == 16, "native configure req
 static_assert(sizeof(ItlAwdlNativeConfigureResponse) == 312, "native configure response ABI");
 static_assert(ItlAwdlNativeTemplate == 27, "append-only native template ABI");
 static_assert(sizeof(ItlAwdlNativeTemplateResponse) == 360, "native template response ABI");
+static_assert(ItlAwdlNativeRadio == 28, "append-only native radio ABI");
+static_assert(sizeof(ItlAwdlNativeRadioResponse) == 160, "native radio response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
 static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
 static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");
