@@ -1123,3 +1123,45 @@ coherent RX hardware clock, with timing/profile checks and the existing TX
 limits intact. One unpublished manager remained, WPA2 passed 33/33 router
 pings, and before/after GPU/display/power assertions passed. Native AirDrop
 remains unavailable.
+
+## Peer-derived qualification epoch — 2026-10-10
+
+Source `15c433184dd260efef83b715fba5860e7dae8780` (revision 42):
+
+- Binary SHA-256: `b02875b848b98b049bb674ef706eeb1229335bd618e40f837f02c7734ef2131b`.
+- Loaded UUID: `542709CA-3C80-3229-B923-DCCDE47DC105`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38063497386)
+  passed all three jobs. Twelve local C++ UBSan suites and five Python checks
+  passed; both 560-slot/63-method native ABI comparisons passed. Tests include
+  same-duration/different-profile rejection, stale RX, master changes and
+  counter/clock wrap. The verified rollback is revision 41.
+
+All 384 initialization contracts and the configuration/timing/template baseline
+passed. The two passive sessions produced 117 and 106 aligned samples and
+**6 and 4 shared channel-6 windows**, compared with zero shared windows in both
+revision 41 sessions. These are RX-clock-derived predictions, not peer receipts.
+They heard 25 and 21 owned actions, with 9 and 5 diagnostic-ring drops and no
+invalid frames. The receive-only runs restored their radio state.
+
+The subsequent broadcast trial submitted one frame during a shared window.
+At the final pre-submit clock read, both local and peer windows had 43,950 us
+remaining, with 21,586 us elapsed in the peer window. Host preparation took
+4 us from the final read to the doorbell. Nevertheless, completion took
+**42,125 us from the encoded frame's GP2 timestamp**, again exceeding 5 ms.
+The first matching closed DMA reply appeared 41,045 us after the doorbell;
+the interrupt filter ran at 42,005 us. Firmware reported success, 168 us media
+duration, no retransmissions and no Bluetooth kills. This fixes window phase
+alignment but does not qualify TX timestamp accuracy.
+
+A read-only receiving-Mac database observer completed 211 samples over about
+45 seconds without errors. Its own address was present in every sample; the
+transmitter address remained absent. This does not prove no RF reception.
+
+The original SSH PTY disconnected after the driver returned its stopped-radio
+result, leaving the harness's final restoration report incomplete. A fresh SSH
+connection verified the same boot and manager, Wi-Fi already on, zero pending
+or aborted TX, and successful WPA2/GPU/display/power checks. The original
+harness was no longer running. Total verified WPA2 pings were 42/42, including
+the separate recovery check. Future RF harnesses should run detached with saved
+progress so a control-session loss cannot interrupt post-test verification.
+Native AirDrop remains unavailable; no identical broadcast retry was made.
