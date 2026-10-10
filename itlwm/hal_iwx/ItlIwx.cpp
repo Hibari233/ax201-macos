@@ -9764,6 +9764,20 @@ iwx_auth(struct iwx_softc *sc)
     
     splassert(IPL_NET);
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // The non-MLO firmware reserves MAC0 for managed/IBSS interfaces (see
+    // iwlwifi's iwl_mvm_mac_ctxt_init). The bounded native TX listener owns
+    // the only active MAC, so MAC1 is available. This is not a station/queue
+    // ID. Binding, ADD_STA and power commands all consume in_id below.
+    static_assert(IWX_NUM_MAC_INDEX_DRIVER > 1, "listener MAC context available");
+    const uint16_t macId = ic->ic_opmode == IEEE80211_M_MONITOR &&
+        awdlNativeRadioOwner && awdlNativeTxQualification ? 1 : 0;
+    const auto active = sc->sc_flags &
+        (IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE);
+    if (active && in->in_id != macId) return EBUSY;
+    if (!active) { in->in_id = macId; in->in_color = 0; }
+#endif
+
     in->in_ni.ni_chw = IEEE80211_CHAN_WIDTH_20_NOHT;
     in->in_ni.ni_flags &= ~(IEEE80211_NODE_HT |
                             IEEE80211_NODE_QOS |
@@ -11114,6 +11128,11 @@ iwx_stop(struct _ifnet *ifp)
         in->in_phyctxt = NULL;
         in->in_ni.ni_chw = IEEE80211_CHAN_WIDTH_20_NOHT;
         IEEE80211_ADDR_COPY(in->in_macaddr, etheranyaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // Firmware has stopped and no context is active. Also restore this
+        // on timeout/error/controller stop, before infrastructure can restart.
+        in->in_id = in->in_color = 0;
+#endif
     }
     
     sc->sc_flags &= ~(IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN);

@@ -803,6 +803,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         bool timelineReady, sentWindow, unicast; uint16_t lastWindow;
         uint32_t peerWindows[unsigned(ItlAwdl::PeerWindowResult::Count)], overlapWindows;
         uint32_t alignedSamples, alignmentUnavailable, navDeferrals, maxNavRemainingUs;
+        uint32_t macIdBefore, macIdDuring, macIdAfter, macContextSamples, macContextMismatches;
         ItlAwdl::PeerTxWindow lastPeerWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
@@ -837,6 +838,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             // Do not turn off STA or change its association from this ioctl.
             if (ic->ic_opmode != IEEE80211_M_STA || ic->ic_state != IEEE80211_S_INIT ||
                 (ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING))) return kIOReturnBusy;
+            if (!ic->ic_bss || reinterpret_cast<iwx_node *>(ic->ic_bss)->in_id)
+                return kIOReturnNotReady;
             auto state = o->nativeStartState();
             if (!state || !state->peerManager) return kIOReturnNotReady;
             o->retain(); c->object = o;
@@ -844,6 +847,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             out->backend_before = o->backendCalls;
             out->creation_before = o->peerCreationCalls;
             out->state_before = ic->ic_state; out->mode_before = ic->ic_opmode;
+            c->macIdBefore = reinterpret_cast<iwx_node *>(ic->ic_bss)->in_id;
             out->flags_before = ic->ic_if.if_flags; out->generation_before = r->com.sc_generation;
             out->channel = o->masterChannel;
             ItlAwdlBeginRequest begin = *c->request;
@@ -888,6 +892,15 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 out->last_error = kIOReturnAborted; c->finished = true; return kIOReturnSuccess;
             }
             out->radio_ready = 1;
+            const auto in = reinterpret_cast<const iwx_node *>(ic->ic_bss);
+            c->macIdDuring = in ? in->in_id : UINT32_MAX;
+            ++c->macContextSamples;
+            const uint32_t required = IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE;
+            if (!in || in->in_color || c->macIdDuring != (c->tx ? 1U : 0U) ||
+                (r->com.sc_flags & required) != required) {
+                ++c->macContextMismatches;
+                out->last_error = kIOReturnError; c->finished = true; return kIOReturnSuccess;
+            }
             if (c->tx) {
                 const auto now=r->awdlObserveNativeTxDma();
                 if (now<c->nextClockHostUs) return kIOReturnSuccess;
@@ -990,6 +1003,8 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         }
         out->stop_reason = s.stopReason;
         out->state_after = ic->ic_state; out->mode_after = ic->ic_opmode;
+        c->macIdAfter = ic->ic_bss ? reinterpret_cast<iwx_node *>(ic->ic_bss)->in_id : UINT32_MAX;
+        if (c->macIdAfter && !out->last_error) out->last_error = kIOReturnError;
         out->flags_after = ic->ic_if.if_flags; out->generation_after = r->com.sc_generation;
         out->radio_stopped = s.session == ItlAwdlIdle && !r->awdlNativeRadioOwner && !s.owner &&
             ic->ic_opmode == IEEE80211_M_STA && !(ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING));
@@ -1009,6 +1024,9 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 put("alignment_unavailable", c->alignmentUnavailable);
                 put("tx_nav_deferred_samples", c->navDeferrals);
                 put("max_observed_nav_remaining_us", c->maxNavRemainingUs);
+                put("mac_id_before", c->macIdBefore); put("mac_id_during", c->macIdDuring);
+                put("mac_id_after", c->macIdAfter); put("mac_context_samples", c->macContextSamples);
+                put("mac_context_mismatches", c->macContextMismatches);
                 put("selected_channel", out->channel);
                 put("last_peer_channel", c->lastPeerWindow.channel);
                 put("last_peer_counter", c->lastPeerWindow.counter);
