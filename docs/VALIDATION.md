@@ -799,3 +799,33 @@ eleven backend calls. WPA2 router pings passed 12/12, and before/after GPU,
 display and power checks passed. Radio synchronization, native packet delivery,
 discovery and AirDrop transfers remain untested. In particular, this result
 does not cover the later native template-producer diagnostic.
+
+## Native template production and complete encoding — 2026-10-10
+
+Source `c21947f1a95d68138c2bf2986486098d21764bc5` (revision 33):
+
+- Binary SHA-256: `e014038863abed719566a1c01d0fbb36454959f418dfd7199ef322c62d612c7f`
+- Loaded UUID: `690B18FC-2A10-3A20-BD3F-FE4654724713`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38051616867)
+  passed all three jobs. The concrete native interface matched 560 slots / 63
+  backend methods. Installation verified the revision 32 rollback.
+
+All 384 initialization contracts passed. Malformed template requests and calls
+before a session or successful configuration were rejected without consuming
+the native-template attempt. One retained manager accepted all ten native
+configuration setters, with the cache-size getter still unsupported.
+
+The single native `updateSyncFrameTemplate(true)` call returned zero and called
+the template setter exactly once. It produced **110 bytes / four TLVs**, with
+types 6, 12, 21 and 24. The owned template combined with the staged configuration
+encoded into a **210-byte MPDU**, which the independent frame/schedule parsers
+accepted. The encoding check used a synthetic clock, never sent to the radio.
+
+Two repeated requests returned identical saved template results with no new
+backend calls; the original configuration trace also remained unchanged. Four
+samples over 20 seconds retained one manager and twelve total backend calls.
+The native interface and queues stayed unpublished and disabled. WPA2 router
+pings passed 18/18; before/after GPU, display and power checks passed.
+
+This verifies real native template production and CPU-only encoding. No RF
+synchronization, native RX delivery, peer discovery or AirDrop transfer occurred.
