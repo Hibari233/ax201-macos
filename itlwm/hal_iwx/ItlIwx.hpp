@@ -174,6 +174,7 @@ private:
     OSObject *awdlNativeRadioOwner = nullptr;
     bool awdlNativeTxQualification = false, awdlNativeP2pQualification = false;
     bool awdlNativeTxSeriesObservation = false;
+    bool awdlNativeRuntime = false; // Separate 48-frame runtime; original trials remain four-frame.
     ItlAwdl::P2pSessionProtection awdlNativeP2pSession;
     uint32_t awdlNativeP2pCommandVersion = 0, awdlNativeP2pNotifVersion = 0;
     int awdlStartNativeP2pSession();

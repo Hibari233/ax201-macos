@@ -9,6 +9,7 @@
 #include <AWDL/AwdlSyncAction.h>
 #include <AWDL/AwdlTxCompletion.h>
 #include <AWDL/AwdlAck.h>
+#include "../../AirportItlwm/AWDL/ItlAwdlNativeInterface.hpp"
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -42,7 +43,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 67108863; // Bit 25: native activation rejection trace. No native AirDrop.
+            out->capabilities = 134217727; // Bit 26: timer-driven native synchronization; no AirDrop claim.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -290,6 +291,10 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
 void ItlIwx::awdlStop(uint32_t reason, uint32_t error) {
     if (!awdlActive()) return;
     __atomic_store_n(&awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
+    if (awdlNativeRuntime && awdlNativeRadioOwner) {
+        auto native = OSDynamicCast(ItlAwdlNativeInterface, awdlNativeRadioOwner);
+        if (native) native->synchronizationRadioStopped();
+    }
     awdl.session = ItlAwdlStopping;
     // This exclusive lease ends through iwx_stop/stop_device below, which
     // removes the entire firmware context, including its session protection.
@@ -404,7 +409,7 @@ IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled, b
     // only while the selected peer was heard on this channel within 500 ms.
     if (!awdl.lastPeerRxUs || now - awdl.lastPeerRxUs > 500000)
         return kIOReturnNotReady;
-    if (awdl.tx.submitted >= (native ? 4U : 8U)) return kIOReturnNoSpace;
+    if (awdl.tx.submitted >= (native ? (awdlNativeRuntime ? ItlAwdl::NativeRuntimeTxLimit : 4U) : 8U)) return kIOReturnNoSpace;
     if (awdl.tx.pending || (awdl.lastProbeUs && now - awdl.lastProbeUs < 100000))
         return kIOReturnBusy;
     return kIOReturnSuccess;
@@ -495,7 +500,14 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     // invented on-air timestamp. The monitor uses the native source MAC/rate.
     awdlNativeTxGp2 = gp2;
     const auto index = awdl.tx.submitted;
-    if (index >= nitems(awdlNativeTrace)) return kIOReturnNoSpace;
+    if (index >= nitems(awdlNativeTrace)) {
+        if (!awdlNativeRuntime || index >= ItlAwdl::NativeRuntimeTxLimit) return kIOReturnNoSpace;
+        // Preserve the first four detailed traces and all aggregate timing.
+        // Do not overwrite a cold first frame with a faster later sample.
+        awdlNativeTraceIndex = UINT32_MAX;
+        __atomic_store_n(&awdlNativeTraceArmed, uint32_t(0), __ATOMIC_RELEASE);
+        return awdlSubmitDiagnostic(bytes, length);
+    }
     auto &trace = awdlNativeTrace[index];
     bzero(&trace,sizeof(trace));
     trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
@@ -1252,6 +1264,13 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
         awdl.schedule.observe(announcement, gp2, awdl.lastPeerRxUs, &sample) &&
         (sample.reset || sample.outlier) && awdl.run.mode != ItlAwdlTestHop && awdl.pendingWindow) {
         awdl.pendingWindow = false; ++awdl.run.cancelled;
+    }
+    // Native management RX is independent of the finite diagnostic ring.
+    // The retained runtime owner verifies firmware generation and enable state.
+    if (awdlNativeRuntime && awdlNativeRadioOwner && !deaggregated) {
+        auto native = OSDynamicCast(ItlAwdlNativeInterface, awdlNativeRadioOwner);
+        if (native) native->synchronizationReceive(bytes, length, channel, rssi, gp2);
+        if (!awdlActive()) return;
     }
     if (awdl.count == ITL_AWDL_RING_COUNT) { ++awdl.rxDropped; return; }
     auto &record = awdl.ring[(awdl.head + awdl.count) % ITL_AWDL_RING_COUNT];

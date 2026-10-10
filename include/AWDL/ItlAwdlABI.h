@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlNativeUnicastTx, ItlAwdlNativeP2pRadio, ItlAwdlNativeP2pUnicastTx, ItlAwdlNativeP2pTxSeries, ItlAwdlNativeP2pPsfSeries, ItlAwdlNativeActivationPreflight, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlNativeUnicastTx, ItlAwdlNativeP2pRadio, ItlAwdlNativeP2pUnicastTx, ItlAwdlNativeP2pTxSeries, ItlAwdlNativeP2pPsfSeries, ItlAwdlNativeActivationPreflight, ItlAwdlNativeRuntime, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -229,6 +229,18 @@ struct ItlAwdlNativeSyncTxResponse {
     uint32_t first_counter, last_counter, windows_used, min_rate_mbps;
     uint32_t last_rate_flags, limit, last_firmware_status;
 };
+// Bounded native synchronization engine. The caller pins ownership while an
+// IOTimerEventSource performs activation, native AW events, RX and action TX.
+// BSD/data queues remain separate; these counters do not prove AirDrop.
+struct ItlAwdlNativeRuntimeResponse {
+    ItlAwdlNativeConfigureResponse activation;
+    uint32_t attempted, ready, stopped, last_error;
+    uint32_t ticks, clock_valid, aw_events, aw_event_errors;
+    uint32_t rx_handed_off, rx_rejected, rx_last_error, role_updates;
+    uint32_t submitted, completed, succeeded, failed, pending, aborted;
+    uint32_t timing_samples, timing_invalid, max_completion_delay_us, stop_reason;
+    uint32_t sync_enabled_after, native_disable_calls, tx_limit, channel;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -282,7 +294,9 @@ static_assert(ItlAwdlNativeP2pRadio == 32, "append-only native P2P radio ABI");
 static_assert(ItlAwdlNativeP2pUnicastTx == 33, "append-only native P2P TX ABI");
 static_assert(ItlAwdlNativeP2pTxSeries == 34, "append-only native P2P TX series ABI");
 static_assert(ItlAwdlNativeP2pPsfSeries == 35, "append-only native P2P PSF series ABI");
-static_assert(ItlAwdlNativeActivationPreflight == 36 && ItlAwdlMethodCount == 37, "append-only native activation preflight ABI");
+static_assert(ItlAwdlNativeActivationPreflight == 36, "append-only native activation preflight ABI");
+static_assert(ItlAwdlNativeRuntime == 37 && ItlAwdlMethodCount == 38, "append-only native runtime ABI");
+static_assert(sizeof(ItlAwdlNativeRuntimeResponse) == 416, "native runtime response ABI");
 static_assert(ItlAwdlNativeTiming == 30, "append-only native timing ABI");
 static_assert(sizeof(ItlAwdlNativeTimingResponse) == 376, "native timing response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");

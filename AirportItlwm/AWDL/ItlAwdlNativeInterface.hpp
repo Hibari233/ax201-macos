@@ -9,6 +9,8 @@
 #include <AWDL/AwdlNativeChannelSequence.h>
 #include <AWDL/AwdlLocalTimeline.h>
 #include <AWDL/AwdlNativeSyncParameters.h>
+#include <AWDL/AwdlNativeRuntime.h>
+#include <IOKit/IOTimerEventSource.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -19,8 +21,8 @@ class IOSkywalkPacket;
 class IOSkywalkTxSubmissionQueue;
 class IOSkywalkRxCompletionQueue;
 
-// Retained native integration and explicit BSD publication. The unfinished
-// radio backend rejects enable requests; no AirDrop capability claim.
+// Retained native integration, bounded management synchronization and separate
+// BSD publication. The IPv6/data path is unfinished; no AirDrop capability claim.
 class ItlAwdlNativeInterface : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(ItlAwdlNativeInterface)
 public:
@@ -50,6 +52,12 @@ public:
     static IOReturn probeRadio(AirportItlwm *, ItlIwx *,
         const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr,
         bool unicast = false, bool p2p = false, bool seriesObservation = false);
+    static IOReturn runSynchronization(AirportItlwm *, ItlIwx *,
+        const ItlAwdlBeginRequest *, ItlAwdlNativeRuntimeResponse *);
+    // HAL invalidation is non-sleeping; the retained transaction cleans up
+    // the native manager after the radio has stopped or controller teardown.
+    void synchronizationRadioStopped();
+    void synchronizationReceive(const uint8_t *, size_t, uint32_t, int32_t, uint32_t);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -60,9 +68,8 @@ public:
     IOReturn enable(unsigned int) override;
     SInt32 setInterfaceEnable(bool) override;
     IOReturn prepareBSDInterface(ifnet_t, unsigned int) override;
-    // Future radio RX entry, under this interface's work-loop gate. Receive
-    // context must already use the synchronization backend's local RX clock.
-    // No RF callback is connected until that clock/backend is qualified.
+    // Management RX under the work-loop gate, after the live synchronization
+    // engine qualifies the shared GP2 clock and native activation succeeds.
     IOReturn receiveAction(const uint8_t *, size_t, const ItlAwdl::NativeActionRxContext &);
     // Snapshot the staged template plus caller-supplied radio sync context.
     // Requires the work-loop gate, but does not transmit or imply RF readiness.
@@ -78,6 +85,21 @@ public:
 #undef ITL_NATIVE_REQUEST
 #undef ITL_NATIVE_IMPLEMENTED_REQUEST
 private:
+    enum RuntimePhase { RuntimeIdle, RuntimeStarting, RuntimeReady, RuntimeRunning, RuntimeStopping, RuntimeDone };
+    RuntimePhase runtimePhase;
+    ItlIwx *runtimeRadio;
+    IOTimerEventSource *runtimeTimer;
+    ItlAwdl::LocalTimeline runtimeTimeline;
+    ItlAwdlNativeRuntimeResponse runtimeResult;
+    bool runtimeSyncEnabled, runtimeNativeEnabled, runtimeEnableInvoked;
+    bool runtimeHadWindow, runtimeClockQualified, preflightRejectEnable;
+    uint16_t runtimeWindow;
+    int runtimeGeneration;
+    uint64_t runtimeNextTxUs;
+    bool runtimeRadioReady() const;
+    void runtimeTick();
+    void finishSynchronization();
+    static void runtimeTimeout(OSObject *, IOTimerEventSource *);
     enum BackendIndex {
 #define ITL_NATIVE_REQUEST(name, type) Backend_##name,
 #define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) Backend_##name,

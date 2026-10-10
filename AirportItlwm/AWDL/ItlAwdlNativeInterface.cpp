@@ -12,6 +12,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSIterator.h>
 #include <libkern/OSAtomic.h>
+#include <kern/clock.h>
 
 // Exported non-virtual member in 24H32. The bridge uses only the retained
 // OSObject pointer; no guessed peer-manager class layout or private writes.
@@ -30,6 +31,8 @@ extern "C" IOReturn nativeAwdlSetSyncParams(OSObject *, apple80211_awdl_sync_par
 
 extern "C" IOReturn nativeAwdlEnable(OSObject *)
     __asm__("__ZN22IO80211AWDLPeerManager10enableAWDLEv");
+extern "C" void nativeAwdlDisable(OSObject *, uint32_t)
+    __asm__("__ZN22IO80211AWDLPeerManager11disableAWDLEj");
 extern "C" OSObject *nativeAwdlSupervisor(OSObject *)
     __asm__("__ZN22IO80211AWDLPeerManager16getP2PSupervisorEv");
 
@@ -105,7 +108,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_PARAMS(apple80211_awdl_sync_params
     if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     static_assert(sizeof(*data) == 24, "24H32 sync parameter request");
     static_assert(offsetof(apple80211_awdl_sync_params, unknown_14) == 20, "24H32 sync parameter tail");
     const auto result = syncParameters.replace(data->version, data->availability_window_length,
@@ -125,8 +128,27 @@ IOReturn ItlAwdlNativeInterface::getAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabl
     static_assert(sizeof(*data) == 12, "24H32 sync-enabled request");
     bzero(data, sizeof(*data));
     data->version = 1;
-    // Radio synchronization cannot be enabled yet. Report its actual state,
-    // independently of administrative IFF_UP or a staged frame template.
+    data->enabled = runtimeSyncEnabled && runtimeClockQualified && runtimeRadioReady();
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_ENABLED, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    if (data->version > 1 || data->unk1 || data->enabled > 1) return finish(kIOReturnBadArgument);
+    // Preserve the negative preflight contract even with a positive backend.
+    if (preflightRejectEnable) return finish(kIOReturnUnsupported);
+    auto loop = getWorkLoop();
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (!data->enabled) {
+        if (!runtimeRadio) return finish(kIOReturnNotReady);
+        synchronizationRadioStopped();
+        return finish(kIOReturnSuccess);
+    }
+    if ((runtimePhase != RuntimeReady && runtimePhase != RuntimeRunning) || !runtimeClockQualified || !runtimeRadioReady())
+        return finish(kIOReturnNotReady);
+    runtimeSyncEnabled = true;
     return finish(kIOReturnSuccess);
 }
 
@@ -151,7 +173,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_BSSID(apple80211_awdl_bssid *data) {
     if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     static_assert(sizeof(*data) == 16, "24H32 BSSID pair request");
     static_assert(offsetof(apple80211_awdl_bssid, bssid) == 4, "24H32 AWDL BSSID");
     static_assert(offsetof(apple80211_awdl_bssid, unk_mac) == 10, "24H32 companion BSSID");
@@ -170,7 +192,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_ID(apple80211_awdl_election_id
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 8, "24H32 election-ID request");
     // The native request word is 32 bits. The 24H32 radio backend stores its
@@ -200,7 +222,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_METRIC(apple80211_awdl_electio
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 12, "24H32 election-metric request");
     // The peer manager resolves override/default policy before this call.
@@ -232,7 +254,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_MIN_RATE(apple80211_awdl_min_rate *data
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 8, "24H32 minimum-rate request");
     // Native 24H32 doubles this byte for firmware's 500-kbit/s rate units;
@@ -269,7 +291,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_MASTER_CHANNEL(apple80211_awdl_master_c
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 8, "24H32 master-channel request");
     const auto channel = data->master_channel;
@@ -311,7 +333,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awd
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == 20, "24H32 election-RSSI request");
     const uint32_t words[] = {data->unk1, data->unk2, data->unk3, data->unk4};
@@ -351,7 +373,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_PRESENCE_MODE(apple80211_awdl_presence_
     // The native setter accepts the complete 0..64 range. Encoding/scheduling
     // applies its own narrower geometry checks instead of silently clamping it.
     if (data->version > 1 || data->mode > 64) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     presenceMode = data->mode;
     presenceModeValid = true;
@@ -378,7 +400,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(appl
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
     if (data->version > 1) return finish(kIOReturnBadArgument);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     // 24H32 sends these four low bytes and zero-extends firmware readback.
     const uint8_t next[] = {uint8_t(data->unk4), uint8_t(data->unk1),
@@ -410,7 +432,7 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple8
     if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
-    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    if (isInterfaceEnabled() || runtimeSyncEnabled) return finish(kIOReturnBusy);
     if (!networkConfiguration.ready()) return finish(kIOReturnNotReady);
     static_assert(sizeof(*data) == ItlAwdl::NativeChannelSequence::RequestLength, "24H32 channel request");
     ItlAwdl::NativeChannelSequence next;
@@ -472,6 +494,22 @@ IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_STATE(apple80211_awdl_sync_state *
     next.state = data->state;
     memcpy(next.master, data->master, sizeof(next.master));
     next.operation_mode = data->operation_mode;
+    if (runtimeSyncEnabled) {
+        if (!runtimeRadioReady()) return finish(kIOReturnNotReady);
+        ItlAwdlClockResponse clock = {};
+        auto error = runtimeRadio->awdlReadClock(&clock);
+        if (error || (clock.flags & 7) != 7) return finish(kIOReturnNotReady);
+        if (next.state == 2 && ItlAwdl::equalMac(next.master, runtimeRadio->awdl.peer)) {
+            ItlAwdl::ScheduleSlot anchor = {};
+            if (!runtimeRadio->awdl.schedule.anchor(clock.gp2_us, clock.host_end_us,
+                syncParameters.periodTu(), uint8_t(presenceMode), &anchor)) return finish(kIOReturnNotReady);
+            if (!runtimeTimeline.start(anchor.start_gp2_us, syncParameters.periodTu(),
+                uint8_t(presenceMode), anchor.counter)) return finish(kIOReturnBadArgument);
+        } else if (next.state != 1 || !ItlAwdl::equalMac(next.master, selfAddress.ether_addr_octet))
+            return finish(kIOReturnUnsupported);
+        ++runtimeResult.role_updates;
+        runtimeHadWindow = false;
+    }
     stagedSyncRole = next;
     stagedSyncRoleValid = true;
     setProperty("AX201StagedSyncRole", next.state, 32);
@@ -568,6 +606,8 @@ IOReturn ItlAwdlNativeInterface::probeActivationPreflight(AirportItlwm *parent, 
         if (c->parent->getAwdlInterface() != object || object->isInactive() ||
             object->resourcesDisposed || !object->startAttempted || object->getWorkLoop() != c->loop)
             return kIOReturnNotReady;
+        if (c->request->operation == ItlAwdlConfigureRun && object->runtimeResult.attempted)
+            return kIOReturnNotPermitted;
         auto &saved = object->activationPreflightResult;
         if (c->request->operation == ItlAwdlConfigureRun && !saved.attempted) {
             // A native activation rejection trace, not an RF enable path.
@@ -595,12 +635,14 @@ IOReturn ItlAwdlNativeInterface::probeActivationPreflight(AirportItlwm *parent, 
             saved.attempted = 1;
             saved.backend_before = object->backendCalls;
             object->backendTrace = &saved;
+            object->preflightRejectEnable = true;
             saved.native_result = static_cast<uint32_t>(nativeAwdlEnable(state->peerManager));
+            object->preflightRejectEnable = false;
             object->backendTrace = nullptr;
             saved.backend_after = object->backendCalls;
             // The audited native enable function stops before its enabled
             // transition when setAWDL_SYNC_ENABLED is rejected. That backend
-            // remains unimplemented/Unsupported in this build. Its earlier
+            // is explicitly held Unsupported throughout this preflight. Its earlier
             // staging calls may replace templates; prohibit RF reuse this boot.
             object->setProperty("AX201ActivationPreflightAttempted", kOSBooleanTrue);
         }
@@ -913,7 +955,7 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
     ItlAwdl::ActionInfo action = {};
     ItlAwdl::SyncAnnouncement decoded = {};
     return length && ItlAwdl::parseAction(frame, length, &action) == ItlAwdl::ParseResult::Valid &&
-        action.tlv_count == templateResult.tlv_count + 1 &&
+        (runtimeRadio || action.tlv_count == templateResult.tlv_count + 1) &&
         ItlAwdl::parseSchedule(frame, length, &decoded) == ItlAwdl::ScheduleResult::Valid &&
         ItlAwdl::equalChannelPlan(decoded.plan, parameters.plan) &&
         ItlAwdl::equalMac(decoded.master, parameters.master) ? length : 0;
@@ -969,7 +1011,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             o = c->parent->nativeAwdlInterface;
             if (!o || c->parent->getAwdlInterface() != o || o->isInactive() || o->resourcesDisposed ||
                 !o->startAttempted || o->getWorkLoop() != r->getMainWorkLoop()) return kIOReturnNotReady;
-            if (o->activationPreflightResult.attempted) return kIOReturnNotPermitted;
+            if (o->activationPreflightResult.attempted || o->runtimeResult.attempted) return kIOReturnNotPermitted;
             if (!r->awdlNativeInterfaceActive || r->awdlNativeRadioOwner || s.owner ||
                 s.session != ItlAwdlIdle || s.commandBusy || o->bsdPublishRequested ||
                 o->getBSDInterface() || o->transportRegistered || o->isInterfaceEnabled()) return kIOReturnBusy;
@@ -1238,6 +1280,290 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
     return result;
 }
 
+// The bounded root transaction retains the controller, HAL, gate and native
+// object. Only this timer operates the radio; sleeping userspace is not a clock.
+static uint64_t nativeRuntimeNowUs() {
+    uint64_t absolute = 0, nanos = 0;
+    clock_get_uptime(&absolute);
+    absolutetime_to_nanoseconds(absolute, &nanos);
+    return nanos / 1000;
+}
+
+bool ItlAwdlNativeInterface::runtimeRadioReady() const {
+    auto r = runtimeRadio;
+    if (!r || !runtimeTimer || resourcesDisposed || isInactive() || !startAttempted ||
+        r->awdlNativeRadioOwner != this || r->awdl.owner != this || !r->awdlNativeRuntime ||
+        r->awdl.session != ItlAwdlListening || r->awdl.commandBusy ||
+        r->com.sc_generation != runtimeGeneration ||
+        !r->awdlNativeP2pSession.ready(runtimeGeneration) ||
+        nativeRuntimeNowUs() >= r->awdl.deadlineUs) return false;
+    const auto ic = &r->com.sc_ic;
+    const auto in = reinterpret_cast<const iwx_node *>(ic->ic_bss);
+    const uint32_t required = IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE;
+    return in && in->in_id == 1 && !in->in_color && ic->ic_state == IEEE80211_S_RUN &&
+        ic->ic_opmode == IEEE80211_M_MONITOR && (ic->ic_if.if_flags & IFF_RUNNING) &&
+        (r->com.sc_flags & required) == required &&
+        !(r->com.sc_flags & (IWX_FLAG_HW_ERR | IWX_FLAG_RFKILL | IWX_FLAG_SHUTDOWN));
+}
+
+void ItlAwdlNativeInterface::synchronizationRadioStopped() {
+    if (!runtimeRadio || runtimePhase == RuntimeDone || runtimePhase == RuntimeIdle) return;
+    runtimeSyncEnabled = runtimeClockQualified = false;
+    runtimePhase = RuntimeStopping;
+    runtimeTimeline.clear();
+    if (runtimeTimer) runtimeTimer->cancelTimeout();
+}
+
+void ItlAwdlNativeInterface::runtimeTimeout(OSObject *owner, IOTimerEventSource *) {
+    static_cast<ItlAwdlNativeInterface *>(owner)->runtimeTick();
+}
+
+void ItlAwdlNativeInterface::runtimeTick() {
+    auto r = runtimeRadio;
+    if (!r || (runtimePhase != RuntimeStarting && runtimePhase != RuntimeRunning)) return;
+    ++runtimeResult.ticks;
+    auto fail = [&](IOReturn error) {
+        if (!runtimeResult.last_error) runtimeResult.last_error = error;
+        synchronizationRadioStopped();
+    };
+    auto rearm = [&]() {
+        if (runtimePhase != RuntimeStarting && runtimePhase != RuntimeRunning) return;
+        auto result = runtimeTimer->setTimeoutUS(ItlAwdl::NativeRuntimeTickUs);
+        if (result) fail(result);
+    };
+    if (!r->awdlActive()) { fail(r->awdl.lastError ? r->awdl.lastError : kIOReturnAborted); return; }
+    if (runtimePhase == RuntimeStarting) {
+        if (r->awdlNativeP2pSession.failed) { fail(kIOReturnIOError); return; }
+        if (!r->awdlNativeP2pSession.ready(r->com.sc_generation)) { rearm(); return; }
+        runtimeGeneration = r->com.sc_generation;
+    }
+    if (!runtimeRadioReady()) { fail(kIOReturnAborted); return; }
+    ItlAwdlClockResponse clock = {};
+    auto error = r->awdlReadClock(&clock);
+    if (error) { fail(error); return; }
+    // RX GP2 and sampled GP2 must correlate before native RX sees this epoch.
+    runtimeClockQualified = (clock.flags & 7) == 7;
+    if (runtimePhase == RuntimeRunning && (clock.flags & 3) != 3) { fail(kIOReturnNotReady); return; }
+    if (!runtimeClockQualified) { rearm(); return; }
+    ++runtimeResult.clock_valid;
+    if (runtimePhase == RuntimeStarting) {
+        ItlAwdl::ScheduleSlot anchor = {};
+        if (!r->awdl.schedule.anchor(clock.gp2_us, clock.host_end_us,
+            syncParameters.periodTu(), uint8_t(presenceMode), &anchor)) { rearm(); return; }
+        if (!runtimeTimeline.start(anchor.start_gp2_us, syncParameters.periodTu(),
+            uint8_t(presenceMode), anchor.counter)) { fail(kIOReturnBadArgument); return; }
+        auto state = nativeStartState();
+        auto peerClass = nativePeerClass();
+        if (!state || !state->peerManager || !peerClass || !state->peerManager->metaCast(peerClass)) {
+            fail(kIOReturnNotReady); return;
+        }
+        auto supervisor = nativeAwdlSupervisor(state->peerManager);
+        if (!supervisor || !supervisor->metaCast("IO80211P2PSupervisor")) { fail(kIOReturnNotReady); return; }
+        runtimePhase = RuntimeReady;
+        runtimeEnableInvoked = true;
+        auto &trace = runtimeResult.activation;
+        trace.attempted = 1;
+        trace.backend_before = backendCalls;
+        backendTrace = &trace;
+        trace.native_result = nativeAwdlEnable(state->peerManager);
+        backendTrace = nullptr;
+        trace.backend_after = backendCalls;
+        // Native enable may return success without calling SYNC_ENABLED.
+        // Require the backend transition and unchanged real radio ownership.
+        if (trace.native_result || !runtimeSyncEnabled || !runtimeRadioReady()) {
+            fail(trace.native_result ? trace.native_result : kIOReturnNotReady); return;
+        }
+        runtimeNativeEnabled = true;
+        runtimePhase = RuntimeRunning;
+        runtimeResult.ready = 1;
+    }
+    ItlAwdl::LocalSyncBoundary boundary = {};
+    if (!runtimeTimeline.sample(clock.gp2_us, &boundary)) { fail(kIOReturnError); return; }
+    ItlAwdl::NativeAvailabilityWindowContext context = {};
+    if (!ItlAwdl::nativeRuntimeWindow(boundary, syncParameters.periodTu(), uint8_t(presenceMode),
+        static_cast<ItlAwdl::NativeSyncRole>(stagedSyncRole.state), stagedSyncRole.master,
+        stagedSyncRole.master, r->awdl.channel, &context)) { fail(kIOReturnBadArgument); return; }
+    if (!runtimeHadWindow || runtimeWindow != context.counter) {
+        ItlAwdl::NativeAvailabilityWindowStart event = {};
+        if (!ItlAwdl::encodeNativeAvailabilityWindowStart(context, &event)) { fail(kIOReturnError); return; }
+        // false means the controller's gate completed dispatch, not a peer ACK.
+        if (reportDataPathEvents(ItlAwdl::NativeAvailabilityWindowStartEvent,
+            event.bytes, sizeof(event), true)) {
+            ++runtimeResult.aw_event_errors; fail(kIOReturnError); return;
+        }
+        ++runtimeResult.aw_events;
+        runtimeHadWindow = true; runtimeWindow = context.counter;
+    }
+    if (runtimePhase != RuntimeRunning || !runtimeSyncEnabled || !runtimeRadioReady()) return;
+    const auto now = nativeRuntimeNowUs();
+    if (r->awdl.tx.failed || r->awdlNativeTimingInvalid) { fail(kIOReturnIOError); return; }
+    if (r->awdl.tx.pending && now - r->awdl.lastProbeUs > 100000) { fail(kIOReturnTimeout); return; }
+    if (!r->awdl.tx.pending && r->awdl.tx.submitted < ItlAwdl::NativeRuntimeTxLimit &&
+        now >= runtimeNextTxUs && boundary.remainingUs > 12000 &&
+        channelSequence.plan().channels[boundary.slot] == r->awdl.channel) {
+        uint8_t frame[ItlAwdl::SyncActionMaxLength];
+        auto length = encodeQualificationFrame(clock.gp2_us, frame, sizeof(frame), &boundary,
+            uint16_t(r->awdl.tx.submitted));
+        if (!length) { fail(kIOReturnBadArgument); return; }
+        error = r->awdlSubmitNativeSync(this, frame, length, clock.gp2_us);
+        if (!error) runtimeNextTxUs = now + uint32_t(syncParameters.framePeriodTu()) * ItlAwdl::TuUs;
+        else if (error != kIOReturnBusy && error != kIOReturnNotReady) { fail(error); return; }
+    }
+    rearm();
+}
+
+void ItlAwdlNativeInterface::synchronizationReceive(const uint8_t *bytes, size_t length,
+    uint32_t channel, int32_t rssi, uint32_t gp2) {
+    if (runtimePhase != RuntimeRunning || !runtimeNativeEnabled || !runtimeHadWindow || !runtimeClockQualified ||
+        !runtimeSyncEnabled || !runtimeRadioReady() || channel != runtimeRadio->awdl.channel) return;
+    const ItlAwdl::NativeActionRxContext rx = {channel, rssi, gp2, true};
+    auto error = receiveAction(bytes, length, rx);
+    if (error) { ++runtimeResult.rx_rejected; runtimeResult.rx_last_error = error; }
+    else ++runtimeResult.rx_handed_off;
+}
+
+void ItlAwdlNativeInterface::finishSynchronization() {
+    if (!runtimeRadio || runtimePhase == RuntimeDone) return;
+    auto r = runtimeRadio;
+    synchronizationRadioStopped();
+    if (runtimeTimer) {
+        auto loop = runtimeTimer->getWorkLoop();
+        if (loop) loop->removeEventSource(runtimeTimer);
+        OSSafeReleaseNULL(runtimeTimer);
+    }
+    // Same native manager is disabled and retained, never freed/recreated.
+    if (runtimeEnableInvoked && !resourcesDisposed && startAttempted) {
+        auto state = nativeStartState();
+        if (state && state->peerManager) {
+            ++runtimeResult.native_disable_calls;
+            nativeAwdlDisable(state->peerManager, 0);
+        }
+    }
+    runtimeNativeEnabled = false;
+    if (r->awdlNativeRadioOwner == this) {
+        if (r->awdl.owner == this && r->awdl.ready) {
+            const auto result = r->awdlCommand(this, ItlAwdlEnd, nullptr, nullptr);
+            if (result && !runtimeResult.last_error) runtimeResult.last_error = result;
+        }
+        r->awdlPublishNativeP2pSession(this);
+        r->awdlPublishNativeRadioFault(this);
+        r->awdlPublishNativePeerProfile(this);
+        r->awdlPublishNativeTxTiming(this);
+        r->awdlNativeRadioOwner = nullptr;
+        r->awdlNativeRuntime = false;
+        r->awdlNativeTxQualification = r->awdlNativeP2pQualification = false;
+        r->awdlNativeTxSeriesObservation = false;
+        bzero(r->awdlNativeAddress, sizeof(r->awdlNativeAddress));
+        r->awdlNativeRateMbps = 0;
+    }
+    const auto &s = r->awdl;
+    runtimeResult.submitted = s.tx.submitted; runtimeResult.completed = s.tx.completed;
+    runtimeResult.succeeded = s.tx.succeeded; runtimeResult.failed = s.tx.failed;
+    runtimeResult.pending = s.tx.pending; runtimeResult.aborted = s.tx.aborted;
+    runtimeResult.timing_samples = r->awdlNativeTimingSamples;
+    runtimeResult.timing_invalid = r->awdlNativeTimingInvalid;
+    runtimeResult.max_completion_delay_us = r->awdlNativeMaxCompletionUs;
+    runtimeResult.stop_reason = s.stopReason;
+    if (s.lastError && !runtimeResult.last_error) runtimeResult.last_error = s.lastError;
+    runtimeResult.stopped = s.session == ItlAwdlIdle && !s.owner && !r->awdlNativeRadioOwner;
+    runtimeResult.sync_enabled_after = runtimeSyncEnabled;
+    runtimeResult.activation.interface_enabled = isInterfaceEnabled();
+    runtimeResult.activation.tx_enabled = transportTx && transportTx->isEnabled();
+    runtimeResult.activation.rx_enabled = transportRx && transportRx->isEnabled();
+    runtimeResult.activation.bsd_present = getBSDInterface() != nullptr;
+    setProperty("AX201NativeRuntimeResult", &runtimeResult, sizeof(runtimeResult));
+    runtimeRadio = nullptr;
+    runtimePhase = RuntimeDone;
+}
+
+IOReturn ItlAwdlNativeInterface::runSynchronization(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlBeginRequest *request, ItlAwdlNativeRuntimeResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->channel || request->reserved || request->padding[0] || request->padding[1] ||
+        request->dwell_ms < 1000 || request->dwell_ms > 5000 || !ItlAwdl::unicastMac(request->peer))
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop() || gate->getWorkLoop()->inGate()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    parent->retain(); radio->retain(); gate->retain();
+    struct Call { AirportItlwm *parent; ItlIwx *radio; const ItlAwdlBeginRequest *request;
+        ItlAwdlNativeInterface *object; bool done; } call = {parent, radio, request, nullptr, false};
+    auto result = gate->runAction([](OSObject *, void *arg, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(arg); auto r = c->radio; auto o = c->parent->nativeAwdlInterface;
+        auto &s = r->awdl; auto ic = &r->com.sc_ic;
+        if (c->parent->isInactive() || !s.ready || !o || c->parent->getAwdlInterface() != o ||
+            o->resourcesDisposed || o->isInactive() || !o->startAttempted ||
+            o->getWorkLoop() != r->getMainWorkLoop()) return kIOReturnNotReady;
+        if (r->pci.pa_tag->configRead16(kIOPCIConfigDeviceID) != 0x7af0 ||
+            r->com.sc_device_family != IWX_DEVICE_FAMILY_AX210) return kIOReturnUnsupported;
+        if (o->activationPreflightResult.attempted || o->runtimeResult.attempted) return kIOReturnNotPermitted;
+        if (!r->awdlNativeInterfaceActive || r->awdlNativeRadioOwner || s.owner || s.commandBusy ||
+            s.session != ItlAwdlIdle || o->bsdPublishRequested || o->getBSDInterface() ||
+            o->transportRegistered || o->isInterfaceEnabled()) return kIOReturnBusy;
+        if (ic->ic_opmode != IEEE80211_M_STA || ic->ic_state != IEEE80211_S_INIT ||
+            (ic->ic_if.if_flags & (IFF_UP | IFF_RUNNING))) return kIOReturnBusy;
+        if (!o->configurationResult.attempted || o->configurationResult.native_result ||
+            !o->templateResult.call.attempted || o->templateResult.call.native_result ||
+            !o->syncParameters.ready() || !o->syncTemplate.length() || !o->stagedSyncRoleValid ||
+            o->stagedSyncRole.state != 1 || o->stagedSyncRole.operation_mode != 1 ||
+            !ItlAwdl::equalMac(o->stagedSyncRole.master, o->selfAddress.ether_addr_octet) ||
+            !o->channelSequence.ready() || o->channelSequence.plan().step_aw != o->presenceMode ||
+            !o->minimumRateValid || !o->masterChannelValid) return kIOReturnNotReady;
+        // First engine supports a real fixed-channel schedule. Reject hopping
+        // plans rather than advertising radio visits that never happen.
+        for (auto channel : o->channelSequence.plan().channels)
+            if (channel != o->masterChannel) return kIOReturnUnsupported;
+        o->retain(); c->object = o;
+        o->runtimeRadio = r; o->runtimePhase = RuntimeStarting;
+        o->runtimeResult = {};
+        o->runtimeResult.attempted = 1;
+        o->runtimeResult.tx_limit = ItlAwdl::NativeRuntimeTxLimit;
+        o->runtimeResult.channel = o->masterChannel;
+        o->runtimeResult.activation.version = ITL_AWDL_ABI_VERSION;
+        o->runtimeResult.activation.present = 1;
+        o->runtimeResult.activation.registry_id = o->getRegistryEntryID();
+        o->runtimeTimer = IOTimerEventSource::timerEventSource(o, runtimeTimeout);
+        if (!o->runtimeTimer) { o->runtimeResult.last_error = kIOReturnNoMemory; return kIOReturnSuccess; }
+        auto error = r->getMainWorkLoop()->addEventSource(o->runtimeTimer);
+        if (error) { o->runtimeResult.last_error = error; return kIOReturnSuccess; }
+        r->awdlNativeRadioOwner = o;
+        r->awdlNativeRuntime = r->awdlNativeTxQualification = r->awdlNativeP2pQualification = true;
+        r->awdlNativeTxSeriesObservation = true; // Discovery session, not ManagementTx.
+        r->awdlNativeRateMbps = o->minimumRateMbps;
+        memcpy(r->awdlNativeAddress, o->selfAddress.ether_addr_octet, 6);
+        r->awdlNativeTimingSamples = r->awdlNativeTimingInvalid = r->awdlNativeMaxCompletionUs = 0;
+        r->awdlNativeLastRate = r->awdlNativeTxGp2 = 0;
+        r->awdlNativeTraceCount = r->awdlNativeTraceIndex = 0;
+        bzero(r->awdlNativeTrace, sizeof(r->awdlNativeTrace));
+        ItlAwdlBeginRequest begin = *c->request; begin.channel = o->masterChannel;
+        error = r->awdlBegin(o, &begin);
+        if (!error) error = o->runtimeTimer->setTimeoutUS(ItlAwdl::NativeRuntimeTickUs);
+        if (error) o->runtimeResult.last_error = error;
+        return kIOReturnSuccess;
+    }, &call);
+    if (call.object) {
+        for (uint32_t elapsed = 0; !result && !call.done && elapsed < request->dwell_ms + 200; elapsed += 20) {
+            IOSleep(20); // Object lifetime only; all synchronization runs on the kernel timer.
+            result = gate->runAction([](OSObject *, void *arg, void *, void *, void *) -> IOReturn {
+                auto c = static_cast<Call *>(arg); auto o = c->object;
+                c->done = o->runtimePhase == RuntimeStopping || o->runtimePhase == RuntimeDone ||
+                    o->runtimeResult.last_error || c->parent->isInactive();
+                return kIOReturnSuccess;
+            }, &call);
+        }
+        auto cleanup = gate->runAction([](OSObject *, void *arg, void *, void *, void *) -> IOReturn {
+            static_cast<Call *>(arg)->object->finishSynchronization(); return kIOReturnSuccess;
+        }, &call);
+        *out = call.object->runtimeResult;
+        if (cleanup && !out->last_error) out->last_error = cleanup;
+        call.object->release();
+    }
+    gate->release(); radio->release(); parent->release();
+    return result;
+}
+
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
     const ItlAwdl::NativeActionRxContext &rx) {
     ItlAwdl::NativeActionMetadata metadata = {};
@@ -1248,10 +1574,11 @@ IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t leng
         return kIOReturnBadArgument;
     auto loop = getWorkLoop();
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
-        isInactive() || !bsdPublishRequested || !getBSDInterface() ||
-        !startAttempted || !isInterfaceEnabled()) return kIOReturnNotReady;
-    // Publishing or administratively raising awdl0 must not admit frames
-    // before an implemented backend has actually started synchronization.
+        isInactive() || !startAttempted || !runtimeNativeEnabled || !runtimeHadWindow ||
+        runtimePhase != RuntimeRunning || !runtimeRadioReady()) return kIOReturnNotReady;
+    // Audited 24H32 bpfTapInput sends management buffers to the native manager
+    // before optional BPF/BSD delivery. Require the real engine and native
+    // enable transaction; BSD data queues are not a management-RX prerequisite.
     apple80211_awdl_sync_enabled sync = {};
     sync.version = 1;
     if (getAWDL_SYNC_ENABLED(&sync) || !sync.enabled) return kIOReturnNotReady;
@@ -1720,6 +2047,11 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     backendTrace = nullptr;
     bzero(&configurationResult, sizeof(configurationResult));
     bzero(&activationPreflightResult, sizeof(activationPreflightResult));
+    runtimePhase = RuntimeIdle; runtimeRadio = nullptr; runtimeTimer = nullptr;
+    runtimeResult = {}; runtimeTimeline = {};
+    runtimeSyncEnabled = runtimeNativeEnabled = runtimeEnableInvoked = false;
+    runtimeHadWindow = runtimeClockQualified = preflightRejectEnable = false;
+    runtimeWindow = 0; runtimeGeneration = -1; runtimeNextTxUs = 0;
     bzero(&templateResult, sizeof(templateResult));
     bzero(&timingResult, sizeof(timingResult));
     transportPool = nullptr;
@@ -1819,6 +2151,7 @@ void *ItlAwdlNativeInterface::createPeerManager() {
 
 void ItlAwdlNativeInterface::stop(IOService *provider) {
     if (!startAttempted) return;
+    finishSynchronization();
     // Transport registration belongs to this same once-per-boot peer manager.
     // Clear its references before native stop destroys the interface resources.
     if (clearTransport(true)) IOLog("AX201 native transport: cleanup failed during stop\n");
@@ -2017,6 +2350,22 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     ++out->methods_checked;
     if (object->getAWDL_SYNC_ENABLED(&enabled) || enabled.version != 1 || enabled.unk1 || enabled.enabled)
         ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_SYNC_ENABLED(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    enabled = {1, 0, 1};
+    bool enableFailed = object->setAWDL_SYNC_ENABLED(&enabled) != kIOReturnNotReady;
+    enabled.version = 2;
+    enableFailed |= object->setAWDL_SYNC_ENABLED(&enabled) != kIOReturnBadArgument;
+    enabled = {1, 1, 1};
+    enableFailed |= object->setAWDL_SYNC_ENABLED(&enabled) != kIOReturnBadArgument;
+    enabled = {1, 0, 2};
+    enableFailed |= object->setAWDL_SYNC_ENABLED(&enabled) != kIOReturnBadArgument;
+    concrete->preflightRejectEnable = true;
+    enabled = {0, 0, 1};
+    enableFailed |= object->setAWDL_SYNC_ENABLED(&enabled) != kIOReturnUnsupported;
+    concrete->preflightRejectEnable = false;
+    if (enableFailed) ++out->method_failures;
     ++out->methods_checked;
     if (object->getAWDL_SYNC_PARAMS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     apple80211_awdl_sync_params timing;
