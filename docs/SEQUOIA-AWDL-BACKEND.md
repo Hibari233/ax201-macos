@@ -1013,8 +1013,8 @@ This is a radio lifecycle preflight; native SYNC, BSD publication and queues
 remain disabled. Hardware results belong in `VALIDATION.md`.
 
 Root-only selector 33 / capability bit 4194304 adds the separate
-`p2p-sync-unicast[-selftest]` diagnostic. It retains the qualified discovery
-protection and broadcast-station lifecycle, adding the same fixed owned-peer
+`p2p-sync-unicast[-selftest]` diagnostic. It retains the qualified P2P device
+and broadcast-station lifecycle, adding the same fixed owned-peer
 MIF used by the listener comparison. Submission requires a successful START
 in the current firmware generation; END, failure, stop or reset closes that
 gate. It preserves current-channel/regulatory checks, fresh owned-peer RX and
@@ -1022,3 +1022,12 @@ clock/window qualification, NAV deferral, one outstanding frame, the four-frame
 limit and the 5 ms completion guard. It accepts neither caller payloads nor
 broadcast TX. Selector 32 remains a no-host-TX preflight. Native AirDrop is
 still disabled; firmware success alone does not establish peer discovery.
+
+After discovery protection failed TX timing in revision 51, the TX selector
+uses configuration 3 (`P2P_GO_NEGOTIATION`), matching Intel's mapping for
+`IEEE80211_ROC_TYPE_MGMT_TX`. The receive-only selector retains discovery
+configuration 2. Notifications must match the selected configuration as well
+as MAC and firmware generation; an unrelated START cannot open the TX gate.
+The selected profile is recorded numerically. This controlled comparison
+changes neither timing limits nor the transmitted frame and does not presume
+that a different protection profile resolves the measured delay.

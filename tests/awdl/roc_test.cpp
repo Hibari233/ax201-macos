@@ -36,5 +36,16 @@ int main() {
         assert(!s.observe(notification,16,7) && s.failed && !s.ready(7));
         word(notification+field,1);
     }
-    std::puts("P2P session notification: identity, generation, expiry, failure and length boundaries passed");
+    s.stop();
+    assert(!s.arm(8,3000,0) && !s.arm(8,3000,1) && !s.arm(8,3000,4));
+    assert(s.arm(8,3000,P2pSessionProtection::ManagementTx) && s.configuration==3);
+    assert(!s.observe(notification,16,8) && !s.ready(8)); // discovery START cannot open TX
+    word(notification+12,3);
+    assert(s.observe(notification,16,8) && s.ready(8));
+    assert(!s.arm(9,3000,P2pSessionProtection::Discovery) && s.configuration==3 && s.ready(8));
+    word(notification+8,0); word(notification+12,2);
+    assert(!s.observe(notification,16,8) && s.ready(8)); // unrelated END cannot stop this profile
+    word(notification+12,3);
+    assert(s.observe(notification,16,8) && !s.ready(8));
+    std::puts("P2P session notification: profiles, identity, generation, expiry, failure and length boundaries passed");
 }

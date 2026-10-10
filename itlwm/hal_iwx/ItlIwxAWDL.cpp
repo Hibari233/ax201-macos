@@ -709,7 +709,8 @@ void ItlIwx::awdlPublishNativePeerProfile(IORegistryEntry *owner) {
 
 int ItlIwx::awdlStartNativeP2pSession() {
     static_assert(ItlAwdl::P2pSessionProtection::MacId == 1 &&
-        ItlAwdl::P2pSessionProtection::Configuration == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV,
+        ItlAwdl::P2pSessionProtection::Discovery == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV &&
+        ItlAwdl::P2pSessionProtection::ManagementTx == IWX_SESSION_PROTECT_CONF_P2P_GO_NEGOTIATION,
         "P2P notification identity matches the firmware command");
     auto in = reinterpret_cast<iwx_node *>(com.sc_ic.ic_bss);
     if (!awdlNativeRadioOwner || !awdlNativeP2pQualification ||
@@ -727,14 +728,19 @@ int ItlIwx::awdlStartNativeP2pSession() {
         (ic->ic_channels[awdl.channel].ic_flags & (IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_DFS)))
         return EPERM;
     const auto now=awdlNowUs();
-    if (now>=awdl.deadlineUs || !awdlNativeP2pSession.arm(com.sc_generation,awdl.deadlineUs-now))
+    // Intel maps a management-TX ROC to GO_NEGOTIATION protection, while a
+    // normal discovery ROC uses DEVICE_DISCOV. Keep the no-host-TX selector
+    // on its qualified configuration; do not accept caller-chosen profiles.
+    const auto config=awdlNativeTxQualification ? ItlAwdl::P2pSessionProtection::ManagementTx :
+        ItlAwdl::P2pSessionProtection::Discovery;
+    if (now>=awdl.deadlineUs || !awdlNativeP2pSession.arm(com.sc_generation,awdl.deadlineUs-now,config))
         return ETIMEDOUT;
     static_assert(sizeof(iwx_session_prot_cmd)==24 && sizeof(iwx_session_prot_notif)==16,
         "P2P session-protection command v1 / notification v2");
     iwx_session_prot_cmd command = {};
     command.id_and_color=htole32(IWX_FW_CMD_ID_AND_COLOR(in->in_id,in->in_color));
     command.action=htole32(IWX_FW_CTXT_ACTION_ADD);
-    command.conf_id=htole32(IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV);
+    command.conf_id=htole32(awdlNativeP2pSession.configuration);
     command.duration_tu=htole32(awdlNativeP2pSession.durationTu);
     const auto generation=com.sc_generation;
     const auto error=iwx_send_cmd_pdu(&com,iwx_cmd_id(IWX_SESSION_PROTECTION_CMD,IWX_MAC_CONF_GROUP,0),
@@ -753,6 +759,7 @@ void ItlIwx::awdlPublishNativeP2pSession(IORegistryEntry *owner) {
         if (n) { d->setObject(key,n); n->release(); }
     };
     const auto &s=awdlNativeP2pSession;
+    put("configuration",s.configuration);
     put("command_version",awdlNativeP2pCommandVersion); put("notification_version",awdlNativeP2pNotifVersion);
     put("duration_tu",s.durationTu); put("start_notifications",s.starts); put("end_notifications",s.ends);
     put("ignored_notifications",s.ignored); put("malformed_notifications",s.malformed);
