@@ -1194,3 +1194,35 @@ proof of absent RF reception. The detached harness completed restoration and
 recorded its failed timing assertion afterward. WPA2 passed 42/42 router pings;
 GPU/display/power checks passed, with the same retained manager. No interface,
 queue or synchronization enablement was attempted. Native AirDrop is unavailable.
+
+## Owned-peer unicast MIF — 2026-10-11
+
+Source `5640275c4ede14bbb9ea9de0f9d714b0f03fc3fc` (revision 44), binary
+`c048ad80edcd8dff8802f9c91095c6981666f2ecec0226460a1ecc7c8278a093`, loaded
+UUID `98DF7DC3-673E-3086-A5FE-CB3EE6E0BCB3`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38065515587)
+passed all three jobs. Twelve local C++ UBSan suites, five Python checks and
+both 560-slot/63-method ABI comparisons passed. Rollback is revision 43.
+
+The first boot health query ran before display enumeration was ready and
+stopped before any native initialization. A later read found one 240 Hz display
+and no GPU errors. The next health query passed, followed by 384 initialization
+contracts and configuration/timing/template checks. Each passive session heard
+17 owned actions, had one diagnostic-ring drop and no invalid frames, and found
+four shared channel-6 windows.
+
+Both old and new malformed-request checks passed; unicast refused an active
+infrastructure connection. The subsequent unicast MIF submitted and completed
+one 210-byte frame with firmware status **1 (success)**, zero retries and no
+Bluetooth kills. Media duration was 228 us, compared with 168 us in the prior
+broadcast; this is consistent with an acknowledged unicast, not proof of native
+AWDL acceptance. Completion still took **33,766 us**, failing the unchanged 5 ms
+guard. The matching DMA reply appeared at 32,936 us after the doorbell. At the
+final clock check the peer window had 48,773 us remaining and 16,763 us elapsed.
+No actual TX or ACK on-air timestamp was measured by this revision.
+
+The receiving Mac's observer found no transmitter entry in 211 samples over
+44.9 seconds, with its own address present throughout. The detached harness
+restored Wi-Fi and preserved the same manager before recording the failed timing
+assertion. WPA2 passed 42/42 router pings and GPU/display/power checks passed.
+Native AirDrop is unavailable; firmware unicast success alone is not completion.
