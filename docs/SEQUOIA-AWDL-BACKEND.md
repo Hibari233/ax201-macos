@@ -98,7 +98,17 @@ The controller's non-retaining AWDL pointer is cleared before the object is
 released. The audited start ownership fields are restricted to 24H32, and the
 compiled `CCPipe::stopPipe()` call was checked against native vptr offset `0x870`.
 
-Reports include native peer-manager instance counts, balanced opens, disposal,
+The first 24H32 run exposed deferred object release: both the injected-failure
+and successful-start paths returned with one interface instance still counted,
+but the following userspace count was zero (11 ms after the successful call).
+The probe now performs one cycle per gate acquisition and waits outside the
+gate, at most 250 one-millisecond sleeps, for native cleanup before repeating.
+An atomic lease excludes other lifecycle probes during that wait. A timeout
+fails the request and prevents another cycle; ordinary Wi-Fi callbacks remain
+able to run. No deferred release is counted as settled merely because stop
+returned.
+
+Reports include settled native peer-manager instance counts, balanced opens, disposal,
 backend call counts and unexpected BSD interfaces. A passing lifecycle probe
 does not establish a working radio or networking interface. There is still no
 queue/BSD registration, link enable or packet transport from this path.

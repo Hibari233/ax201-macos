@@ -4,6 +4,25 @@
 #include <Airport/CCPipe.h>
 #include <libkern/version.h>
 #include <libkern/c++/OSSymbol.h>
+#include <libkern/OSAtomic.h>
+
+namespace {
+// Native log/service detach may defer the final release until the work queue
+// gate opens. Serialize both probe entry points while waiting outside that gate.
+volatile UInt32 nativeProbeActive = 0;
+struct NativeProbeLease {
+    bool owned;
+    NativeProbeLease() : owned(OSCompareAndSwap(0, 1, &nativeProbeActive)) {}
+    ~NativeProbeLease() { if (owned) OSCompareAndSwap(1, 0, &nativeProbeActive); }
+};
+const OSMetaClass *nativePeerClass() {
+    auto name = OSSymbol::withCStringNoCopy("IO80211AWDLPeerManager");
+    if (!name) return nullptr;
+    auto result = OSMetaClass::getMetaClassWithName(name);
+    name->release();
+    return result;
+}
+}
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
@@ -110,10 +129,7 @@ IOReturn ItlAwdlNativeInterface::probeStartGated(AirportItlwm *parent, ItlIwx *r
     if (status.device_id != 0x7af0) return kIOReturnUnsupported;
     out->live_before = metaClass->getInstanceCount();
     if (out->live_before) return kIOReturnBusy;
-    auto name = OSSymbol::withCStringNoCopy("IO80211AWDLPeerManager");
-    if (!name) return kIOReturnNoMemory;
-    auto peerClass = OSMetaClass::getMetaClassWithName(name);
-    name->release();
+    auto peerClass = nativePeerClass();
     if (!peerClass) return kIOReturnUnsupported;
     out->peer_live_before = peerClass->getInstanceCount();
     if (out->peer_live_before) return kIOReturnBusy;
@@ -169,8 +185,9 @@ IOReturn ItlAwdlNativeInterface::probeStartGated(AirportItlwm *parent, ItlIwx *r
         out->backend_calls += object->backendCalls;
         object->release();
         ++out->released;
-        if (metaClass->getInstanceCount() || peerClass->getInstanceCount() ||
-            parent->getAwdlInterface() || out->provider_open_after || out->cleanup_errors)
+        // Instance counts are settled outside this gate. In 24H32 the last
+        // service/log reference is normally released after it opens again.
+        if (parent->getAwdlInterface() || out->provider_open_after || out->cleanup_errors)
             result = kIOReturnError;
         if (result) break;
     }
@@ -188,13 +205,52 @@ IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
         request->fail_peer_creation > 1) return kIOReturnBadArgument;
     auto gate = radio->getMainCommandGate();
     if (!gate) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    auto peerClass = nativePeerClass();
+    if (!peerClass) return kIOReturnUnsupported;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    ItlAwdlNativeStartRequest single = *request;
+    single.iterations = 1;
+    ItlAwdlNativeStartResponse step = {};
     struct Call { AirportItlwm *parent; ItlIwx *radio;
         const ItlAwdlNativeStartRequest *request; ItlAwdlNativeStartResponse *out; } call = {
-            parent, radio, request, out};
-    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
-        auto call = static_cast<Call *>(argument);
-        return probeStartGated(call->parent, call->radio, call->request, call->out);
-    }, &call);
+            parent, radio, &single, &step};
+    for (uint32_t i = 0; i < request->iterations; ++i) {
+        IOReturn result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            auto call = static_cast<Call *>(argument);
+            return probeStartGated(call->parent, call->radio, call->request, call->out);
+        }, &call);
+        if (result) return result;
+        // No gate is held during this bounded wait, so native deferred cleanup
+        // and ordinary Wi-Fi callbacks can run. Never create another object
+        // unless the preceding object's and peer manager's counts are zero.
+        unsigned waited = 0;
+        while ((metaClass->getInstanceCount() || peerClass->getInstanceCount()) && waited < 250) {
+            IOSleep(1);
+            ++waited;
+        }
+        step.live_after = metaClass->getInstanceCount();
+        step.peer_live_after = peerClass->getInstanceCount();
+        if (!step.peer_live_after) step.peer_managers_released = step.peer_managers_created;
+        if (step.live_after || step.peer_live_after) step.last_error = kIOReturnTimeout;
+        IOLog("AX201 native probe: cleanup wait=%u ms live=%u peer=%u\n",
+              waited, step.live_after, step.peer_live_after);
+#define SUM(field) out->field += step.field
+        SUM(attempted); SUM(initialized); SUM(attached); SUM(start_succeeded);
+        SUM(expected_start_failures); SUM(peer_managers_created); SUM(peer_managers_released);
+        SUM(stopped); SUM(partial_cleanups); SUM(released); SUM(provider_open_after);
+        SUM(backend_calls); SUM(bsd_interfaces); SUM(cleanup_errors); SUM(peer_creation_calls);
+#undef SUM
+        if (!i) { out->live_before = step.live_before; out->peer_live_before = step.peer_live_before; }
+        out->live_after = step.live_after;
+        out->peer_live_after = step.peer_live_after;
+        out->controller_pointer_after = step.controller_pointer_after;
+        out->last_error = step.last_error;
+        if (out->last_error) break;
+    }
+    return kIOReturnSuccess;
 }
 
 void ItlAwdlNativeInterface::checkUnsupportedContract(IO80211AWDLProtocol *object,
@@ -272,6 +328,8 @@ IOReturn ItlAwdlNativeInterface::probeInitialization(AirportItlwm *parent, ItlIw
         request->stop_after > 2) return kIOReturnBadArgument;
     auto gate = radio->getMainCommandGate();
     if (!gate) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
     struct Call { AirportItlwm *parent; ItlIwx *radio;
         const ItlAwdlNativeInitRequest *request; ItlAwdlNativeInitResponse *out; } call = {
             parent, radio, request, out};
