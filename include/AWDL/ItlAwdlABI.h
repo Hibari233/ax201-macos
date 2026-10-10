@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -126,6 +126,20 @@ struct ItlAwdlNativePacketResponse {
     uint32_t metadata_checks, bounds_denied, pools_before, pools_after;
     uint32_t packets_before, packets_after, last_error, reserved;
 };
+// Disabled native queues, without interface registration, channel/ring or RF.
+// stop_after deliberately exits after a setup stage; it is not an Apple
+// allocation-failure injection. 1 pool, 2 TX, 3 RX, 4 TX work source,
+// 5 RX work source, 6 TX initialize, 7 RX initialize; 0 runs two reuse cycles.
+struct ItlAwdlNativeQueueRequest { uint32_t version, iterations, stop_after, reserved; };
+struct ItlAwdlNativeQueueResponse {
+    uint32_t version, attempted, completed, expected_stops;
+    uint32_t pools_created, tx_created, rx_created, source_adds;
+    uint32_t source_removes, initialized, finalized, queues_released;
+    uint32_t metadata_checks, rejections, allocations, returned;
+    uint32_t bytes_checked, callback_calls, pools_before, pools_after;
+    uint32_t packets_before, packets_after, tx_before, tx_after;
+    uint32_t rx_before, rx_after, cleanup_errors, last_error;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -162,6 +176,9 @@ static_assert(sizeof(ItlAwdlNativeSessionResponse) == 56, "native session respon
 static_assert(ItlAwdlNativePackets == 22, "append-only native packet ABI");
 static_assert(sizeof(ItlAwdlNativePacketRequest) == 16, "native packet request ABI");
 static_assert(sizeof(ItlAwdlNativePacketResponse) == 80, "native packet response ABI");
+static_assert(ItlAwdlNativeQueues == 23, "append-only native queue ABI");
+static_assert(sizeof(ItlAwdlNativeQueueRequest) == 16, "native queue request ABI");
+static_assert(sizeof(ItlAwdlNativeQueueResponse) == 112, "native queue response ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");

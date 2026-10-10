@@ -216,6 +216,47 @@ Failure injection tests partial pool disposal. Settled driver pool/packet
 instance counts must return to zero before another cycle begins. This is a
 memory/ownership test, not a networking throughput or AirDrop test.
 
+## Disabled native queue prototype
+
+Selector 23 and capability bit 8192 add bounded queue ownership diagnostics.
+They use `IOSkywalkTxSubmissionQueue` and `IOSkywalkRxCompletionQueue` through
+audited 24H32 declarations. The common base is `IOEventSource`, with native
+extents `0xd8`, `0x168` and `0x138`. Initialization, finalization and array RX
+enqueue return `IOReturn`; zero means success. Unused, unaudited entry points
+remain private aliases. Separate driver metaclasses add no virtual overrides
+and allow counting only the objects owned by the diagnostic.
+
+```
+sudo build/tools/awdl_native_queues selftest
+sudo build/tools/awdl_native_queues run 1 1 # pool only, early cleanup
+sudo build/tools/awdl_native_queues run 1 7 # both queues initialized, cleanup
+sudo build/tools/awdl_native_queues run 1 0 # two disabled queue reuse cycles
+```
+
+Each request permits at most two cycles and excludes the other native/radio
+diagnostics. It uses the existing radio work loop and gate, checks IOBSD
+availability, creates a fixed pool and two 32-entry queues, and keeps them
+disabled throughout. Early-exit stages 1–7 test cleanup after each setup step;
+they do not simulate allocator failure inside the native implementation.
+
+Queue initialization checks the queue into a retaining pool collection. The
+diagnostic must finalize initialized queues before removing work sources and
+releasing its queue/pool references, or it could leave a reference cycle.
+Finalization is followed by reinitialization on the same pair in a normal run.
+After all releases, owned packet, pool, TX and RX instance counts must settle
+to zero within the bounded wait outside the gate. Callbacks return zero and
+any invocation fails this disabled-queue diagnostic.
+
+A normal cycle also attempts to enqueue eight simultaneous CPU packet leases
+into the disabled RX queue, twice. Every call must return `kIOReturnNotOpen`
+without taking ownership. The driver checks retained payload contents before
+returning them. It verifies queue direction, identifier, empty capacity and
+the native queue-info command. The queue base's buffer-count accessor returns
+zero; it is not the per-packet single-buffer count. No queue is enabled, no
+channel/ring or BSD interface is attached, and nothing reaches firmware.
+Runtime qualification is recorded separately; passing these checks is not
+evidence of packet delivery, peer discovery or AirDrop transfer.
+
 ## Request extents
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`

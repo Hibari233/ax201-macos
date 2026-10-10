@@ -21,6 +21,8 @@ public:
     static void releaseManaged(AirportItlwm *);
     static IOReturn probePackets(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativePacketRequest *, ItlAwdlNativePacketResponse *);
+    static IOReturn probeQueues(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeQueueRequest *, ItlAwdlNativeQueueResponse *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;

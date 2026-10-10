@@ -84,6 +84,7 @@ def main():
         sources += [ROOT / 'AirportItlwm/AWDL/ItlAwdlUserClient.cpp',
                     ROOT / 'AirportItlwm/AWDL/ItlAwdlNativeInterface.cpp',
                     ROOT / 'AirportItlwm/AWDL/ItlAwdlNativePacket.cpp',
+                    ROOT / 'AirportItlwm/AWDL/ItlAwdlNativeQueues.cpp',
                     ROOT / 'itlwm/hal_iwx/ItlIwxAWDL.cpp']
     # Regenerate from this checkout, rather than reusing a stale ignored file.
     if not args.native_abi_test:

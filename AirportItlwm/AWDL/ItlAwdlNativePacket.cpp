@@ -16,11 +16,20 @@ void *ItlAwdlNativePacket::getVirtualAddress() {
     return getPacketBufferCount() == 1 ? getDataVirtualAddress() : nullptr;
 }
 
-bool ItlAwdlNativePacketPool::initializeForProbe(OSObject *owner, unsigned int failure) {
+bool ItlAwdlNativePacketPool::initializePool(const char *name, OSObject *owner, unsigned int failure) {
     failureMode = failure;
     packetFactories = segmentFactories = injectedFailures = 0;
     PoolOptions options = {64, 64, ItlAwdlNativePacket::BufferSize, 1, 16384, 0, nullptr};
-    return initWithName("ax201.awdl.packet-probe", owner, 1, &options);
+    return initWithName(name, owner, 1, &options);
+}
+ItlAwdlNativePacketPool *ItlAwdlNativePacketPool::withOwner(OSObject *owner) {
+    if (!owner) return nullptr;
+    auto pool = new ItlAwdlNativePacketPool;
+    if (pool && !pool->initializePool("ax201.awdl.packets", owner, 0)) {
+        pool->release();
+        return nullptr;
+    }
+    return pool;
 }
 IOReturn ItlAwdlNativePacketPool::newPacket(IOSkywalkPacketDescriptor *descriptor, IOSkywalkPacket **out) {
     if (!out) return kIOReturnBadArgument;
@@ -131,7 +140,7 @@ IOReturn ItlAwdlNativePacketPool::probeCycle(OSObject *owner, unsigned int failu
     auto pool = new ItlAwdlNativePacketPool;
     if (!pool) return kIOReturnNoMemory;
     ++out->attempted;
-    bool initialized = pool->initializeForProbe(owner, failure);
+    bool initialized = pool->initializePool("ax201.awdl.packet-probe", owner, failure);
     IOReturn result = kIOReturnSuccess;
     if (initialized) {
         ++out->initialized;

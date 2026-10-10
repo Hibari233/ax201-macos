@@ -60,6 +60,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {nativeStart, 0, sizeof(ItlAwdlNativeStartRequest), 0, sizeof(ItlAwdlNativeStartResponse)},
         {nativeSession, 0, sizeof(ItlAwdlNativeSessionRequest), 0, sizeof(ItlAwdlNativeSessionResponse)},
         {nativePackets, 0, sizeof(ItlAwdlNativePacketRequest), 0, sizeof(ItlAwdlNativePacketResponse)},
+        {nativeQueues, 0, sizeof(ItlAwdlNativeQueueRequest), 0, sizeof(ItlAwdlNativeQueueResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -84,6 +85,12 @@ IOReturn ItlAwdlUserClient::nativePackets(OSObject *o, void *, IOExternalMethodA
     return ItlAwdlNativeInterface::probePackets(self->driver, self->radio,
         static_cast<const ItlAwdlNativePacketRequest *>(a->structureInput),
         static_cast<ItlAwdlNativePacketResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeQueues(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeQueues(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeQueueRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeQueueResponse *>(a->structureOutput));
 }
 IOReturn ItlAwdlUserClient::nativeStart(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);

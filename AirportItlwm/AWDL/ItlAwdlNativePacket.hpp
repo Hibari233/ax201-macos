@@ -33,11 +33,12 @@ private:
 class ItlAwdlNativePacketPool : public IOSkywalkPacketBufferPool {
     OSDeclareDefaultStructors(ItlAwdlNativePacketPool)
 public:
+    static ItlAwdlNativePacketPool *withOwner(OSObject *);
     static IOReturn probeCycle(OSObject *, unsigned int, ItlAwdlNativePacketResponse *);
     IOReturn newPacket(IOSkywalkPacketDescriptor *, IOSkywalkPacket **) override;
     IOReturn newMemorySegment(IOSkywalkMemorySegmentDescriptor *, IOSkywalkMemorySegment **) override;
 private:
     uint32_t failureMode, packetFactories, segmentFactories, injectedFailures;
-    bool initializeForProbe(OSObject *, unsigned int);
+    bool initializePool(const char *, OSObject *, unsigned int);
     IOReturn checkBuffers(ItlAwdlNativePacketResponse *);
 };
