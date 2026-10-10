@@ -4,6 +4,7 @@
 #include <Airport/macOS15/IO80211AWDLProtocol.h>
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlNativeMetadata.h>
+#include <AWDL/AwdlActionTemplate.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -54,9 +55,12 @@ public:
         ++backendCalls; \
         return data ? kIOReturnUnsupported : kIOReturnBadArgument; \
     }
+#define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type) IOReturn name(type *data) override;
 #include "ItlAwdlNativeRequests.def"
 #undef ITL_NATIVE_REQUEST
+#undef ITL_NATIVE_IMPLEMENTED_REQUEST
 private:
+    ItlAwdl::ActionTemplate syncTemplate;
     IO80211Controller *controller;
     bool virtualInitAttempted;
     bool resourcesDisposed;
@@ -89,7 +93,7 @@ private:
     bool initializeForProbe(IO80211Controller *, ether_addr *, uint32_t,
         ItlAwdlNativeInitResponse *);
     void disposeInitializedResources();
-    static void checkUnsupportedContract(IO80211AWDLProtocol *, ItlAwdlNativeInitResponse *);
+    static void checkBackendContract(ItlAwdlNativeInterface *, ItlAwdlNativeInitResponse *);
     static IOReturn probeGated(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeInitRequest *, ItlAwdlNativeInitResponse *);
     static IOReturn probeStartGated(AirportItlwm *, ItlIwx *,

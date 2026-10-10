@@ -45,6 +45,33 @@ const OSMetaClass *nativePeerClass() {
 
 OSDefineMetaClassAndStructors(ItlAwdlNativeInterface, IO80211AWDLProtocol)
 
+IOReturn ItlAwdlNativeInterface::getAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *data) {
+    ++backendCalls;
+    if (!data) return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    static_assert(sizeof(*data) == 12, "24H32 sync-enabled request");
+    bzero(data, sizeof(*data));
+    data->version = 1;
+    // Radio synchronization cannot be enabled yet. Report its actual state,
+    // independently of administrative IFF_UP or a staged frame template.
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_sync_frame_template *data) {
+    ++backendCalls;
+    if (!data) return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return kIOReturnNotReady;
+    static_assert(sizeof(*data) == 16, "24H32 template request");
+    static_assert(offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "24H32 template pointer");
+    if (data->version > 1 || !syncTemplate.replace(
+        static_cast<const uint8_t *>(data->payload), data->payload_len)) return kIOReturnBadArgument;
+    // The host now owns a validated snapshot for a future radio scheduler.
+    // No frame is sent and sync-enabled remains false.
+    return kIOReturnSuccess;
+}
+
 IOReturn ItlAwdlNativeInterface::receiveAction(const uint8_t *frame, size_t length,
     const ItlAwdl::NativeActionRxContext &rx) {
     ItlAwdl::NativeActionMetadata metadata = {};
@@ -500,6 +527,7 @@ IOReturn ItlAwdlNativeInterface::probePackets(AirportItlwm *parent, ItlIwx *radi
 
 bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     ether_addr *address, uint32_t stopAfter, ItlAwdlNativeInitResponse *out) {
+    syncTemplate = {};
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -531,6 +559,7 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
 void ItlAwdlNativeInterface::disposeInitializedResources() {
     if (resourcesDisposed) return;
     resourcesDisposed = true;
+    syncTemplate.clear();
     // VirtualInterface::init registers power interest and opens the controller.
     // The native free() only frees its arrays/expansion. stop() is inappropriate
     // here: Skywalk::stop assumes start() has created a peer manager.
@@ -579,6 +608,7 @@ void ItlAwdlNativeInterface::stop(IOService *provider) {
     if (clearTransport(true)) IOLog("AX201 native transport: cleanup failed during stop\n");
     startAttempted = false;
     startAllowed = false;
+    syncTemplate.clear();
     auto state = nativeStartState();
     if (state && state->peerManager && state->controller) {
         // Native VirtualInterface::stop includes the one BPF free and calls
@@ -743,8 +773,9 @@ IOReturn ItlAwdlNativeInterface::probeStart(AirportItlwm *parent, ItlIwx *radio,
     return kIOReturnSuccess;
 }
 
-void ItlAwdlNativeInterface::checkUnsupportedContract(IO80211AWDLProtocol *object,
+void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concrete,
     ItlAwdlNativeInitResponse *out) {
+    IO80211AWDLProtocol *object = concrete;
     // Exercise virtual dispatch through the native base type. Unknown request
     // extents stay opaque: these methods must not dereference even one byte.
     alignas(16) uint8_t sentinel = 0x5a;
@@ -756,8 +787,36 @@ void ItlAwdlNativeInterface::checkUnsupportedContract(IO80211AWDLProtocol *objec
         if (object->name(reinterpret_cast<type *>(&sentinel)) != kIOReturnUnsupported || \
             sentinel != 0x5a) ++out->method_failures; \
     } while (false);
+#define ITL_NATIVE_IMPLEMENTED_REQUEST(name, type)
 #include "ItlAwdlNativeRequests.def"
 #undef ITL_NATIVE_REQUEST
+#undef ITL_NATIVE_IMPLEMENTED_REQUEST
+    // Audited methods receive real, fully sized structures, never the opaque
+    // one-byte sentinel used for methods that must not inspect their payload.
+    ++out->methods_checked;
+    if (object->getAWDL_SYNC_ENABLED(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_sync_enabled enabled = {0xaaaaaaaa, 0xaaaaaaaa, 0xaaaaaaaa};
+    ++out->methods_checked;
+    if (object->getAWDL_SYNC_ENABLED(&enabled) || enabled.version != 1 || enabled.unk1 || enabled.enabled)
+        ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_SYNC_FRAME_TEMPLATE(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    uint8_t payload[] = {21, 2, 0, 0x10, 1};
+    apple80211_awdl_sync_frame_template request = {0, sizeof(payload), payload};
+    ++out->methods_checked;
+    const auto result = object->setAWDL_SYNC_FRAME_TEMPLATE(&request);
+    payload[4] = 2; // A snapshot must not reference the producer's stack.
+    const uint8_t expected[] = {21, 2, 0, 0x10, 1};
+    bool failed = result || concrete->syncTemplate.length() != sizeof(expected) ||
+        memcmp(concrete->syncTemplate.bytes(), expected, sizeof(expected));
+    const auto revision = concrete->syncTemplate.revision();
+    request.payload_len = 4; // Truncated TLV must preserve the prior template.
+    failed |= object->setAWDL_SYNC_FRAME_TEMPLATE(&request) != kIOReturnBadArgument;
+    failed |= concrete->syncTemplate.revision() != revision ||
+        concrete->syncTemplate.length() != sizeof(expected) ||
+        memcmp(concrete->syncTemplate.bytes(), expected, sizeof(expected));
+    concrete->syncTemplate.clear();
+    if (failed) ++out->method_failures;
     ether_addr address = {{2, 0, 0, 0, 0, 1}};
     ++out->methods_checked;
     if (object->setMacAddress(address) != kIOReturnUnsupported) ++out->method_failures;
@@ -786,7 +845,7 @@ IOReturn ItlAwdlNativeInterface::probeGated(AirportItlwm *parent, ItlIwx *radio,
         if (!object) { result = kIOReturnNoMemory; break; }
         ++out->attempted;
         bool initialized = object->initializeForProbe(parent, &address, request->stop_after, out);
-        if (initialized && request->stop_after == 0) checkUnsupportedContract(object, out);
+        if (initialized && request->stop_after == 0) checkBackendContract(object, out);
         if (initialized && request->stop_after == 0) {
             IO80211AWDLProtocol *native = object;
             const auto returnedAddress = native->getSelfMacAddr();

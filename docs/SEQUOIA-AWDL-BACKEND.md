@@ -49,16 +49,19 @@ boot. Capability bit 512 means this probe exists, not that AirDrop works.
 sudo build/tools/awdl_native_init selftest
 sudo build/tools/awdl_native_init run 1 1  # base init, cleanup
 sudo build/tools/awdl_native_init run 1 2  # virtual init, cleanup
-sudo build/tools/awdl_native_init run 1 0  # full init + unsupported-method checks
+sudo build/tools/awdl_native_init run 1 0  # full init + backend contract checks
 ```
 
 Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
-The complete phase also checks virtual dispatch through all 63 native backend
-methods using null and non-null opaque pointers, plus `setMacAddress` and the
-self-address getter. Full initialization must open the controller successfully. The
-unimplemented methods return explicit errors and do not inspect request bytes.
+The complete phase checks virtual dispatch through all 63 native backend
+methods, plus `setMacAddress` and the self-address getter. The 61 unimplemented
+methods receive null and non-null opaque pointers and must not inspect request
+bytes. Two implemented methods instead receive fully sized audited structures:
+the sync-state getter reports disabled, and the template setter stages an owned
+copy and rejects truncation without changing it. Full initialization must open
+the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
 In 24H32 the getter returns six address bytes in the return register and native
@@ -382,6 +385,26 @@ union validity. The two management-buffer compile fixtures matched 71 native
 virtual slots; this establishes declarations, not live receive behavior.
 
 ## Request extents
+
+Two backend requests now have concrete host behavior. `getAWDL_SYNC_ENABLED`
+clears its audited 12-byte output, sets version 1 and reports disabled. Neither
+`IFF_UP` nor a saved template makes synchronization enabled. The setter for
+sync enable still returns unsupported, and interface enable still fails.
+
+`setAWDL_SYNC_FRAME_TEMPLATE` accepts the audited 16-byte descriptor under the
+controller work-loop gate. Version 0 is used by the native producer; version 1
+is also accepted. Its payload must be a nonempty, bounds-checked TLV sequence
+of at most 512 bytes. The driver owns a complete snapshot before returning;
+failed updates preserve the previous bytes/revision. Stop/free clears it.
+This is host staging only: it does not program firmware or transmit. The
+native producer's 512-byte stack buffer contains supplementary TLVs and omits
+the action header and radio-generated synchronization fields. The future RF
+backend must construct those separately. On the inspected 24H32 build, selector
+151 has a handler only in the internal set table; both external set tables
+contain null entries. The internal wrapper checks the interface state and casts
+to the AWDL protocol before calling the backend with the native kernel producer's
+descriptor. No new user-client method accepts this pointer-bearing structure.
+Runtime qualification remains pending before deployment.
 
 The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
 at `0xffffff8002988078` returns a full `IOReturn`, preserving the copy/registration
