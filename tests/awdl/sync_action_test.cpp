@@ -107,6 +107,16 @@ int main() {
     assert(parseAction(out,n,&action) == ParseResult::Valid);
     assert(parseSchedule(out,n,&sync) == ScheduleResult::Valid);
 
+    // Initial-discovery PSF: a broadcast destination and subtype zero, with
+    // the same supplementary template and timing profile as the MIF above.
+    auto psf = c; memcpy(psf.destination, broadcast, sizeof(broadcast));
+    assert(buildSyncAction(psf,s,extra,network,out,sizeof(out)) == n);
+    assert(out[30] == 0 && equalMac(out+4,broadcast) && equalMac(out+10,c.source));
+    assert(syncQualificationDestination(out+4,c.destination,false));
+    assert(!syncQualificationDestination(out+4,c.destination,true));
+    assert(syncWireProfile(out,n,&profile) && profile.subtype == 0 && profile.flags == 0x1800);
+    assert(equalChannelPlan(profile.plan,s.plan));
+
     auto rejected = [&](const SyncActionContext &bc, const SyncActionParameters &bs, const ActionTemplate &bt) {
         memset(out, 0xa5, sizeof(out));
         assert(!buildSyncAction(bc, bs, bt, network, out, sizeof(out)));

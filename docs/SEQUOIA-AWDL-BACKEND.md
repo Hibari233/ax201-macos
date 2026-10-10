@@ -1125,3 +1125,20 @@ queue, whereas an equal-duration discovery RX lease ended normally. This
 profile change is a controlled comparison, not a proven fix. The current
 generation START requirement, four-frame/one-pending bounds, lease duration,
 packet encoding, rate, clock/window checks and both timing limits are unchanged.
+
+## Broadcast discovery comparison
+
+Root-only selector 35 / capability bit 16777216 adds
+`p2p-psf-series[-selftest]`. It runs the same bounded P2P discovery session as
+selector 34, but sends broadcast PSF (subtype 0) instead of addressed MIF
+(subtype 3). This tests initial broadcast discovery on the qualified P2P MAC
+path independently of addressed management-frame acceptance. It does not
+assert that an unknown peer must receive PSF before MIF.
+
+The selected owned peer is still required for fresh receive-clock, NAV,
+channel and window qualification. The destination is generated internally as
+broadcast; callers cannot provide payloads or other destinations. The four-frame
+and one-pending limits, five-second maximum lease, 100 ms observation deadline,
+original 5 ms qualification, native TLVs, compatibility flags and 12 Mbps rate
+are unchanged. Firmware success for broadcast has no receiver-ACK implication.
+Native enablement, RX handoff and operational AirDrop remain disabled.
