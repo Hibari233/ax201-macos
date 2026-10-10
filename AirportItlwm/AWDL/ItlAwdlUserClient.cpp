@@ -58,6 +58,7 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {dataProbe, 0, sizeof(ItlAwdlDataProbeRequest), 0, 0},
         {nativeInit, 0, sizeof(ItlAwdlNativeInitRequest), 0, sizeof(ItlAwdlNativeInitResponse)},
         {nativeStart, 0, sizeof(ItlAwdlNativeStartRequest), 0, sizeof(ItlAwdlNativeStartResponse)},
+        {nativeSession, 0, sizeof(ItlAwdlNativeSessionRequest), 0, sizeof(ItlAwdlNativeSessionResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -82,6 +83,12 @@ IOReturn ItlAwdlUserClient::nativeStart(OSObject *o, void *, IOExternalMethodArg
     return ItlAwdlNativeInterface::probeStart(self->driver, self->radio,
         static_cast<const ItlAwdlNativeStartRequest *>(a->structureInput),
         static_cast<ItlAwdlNativeStartResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeSession(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::managedSession(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeSessionRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeSessionResponse *>(a->structureOutput));
 }
 IOReturn ItlAwdlUserClient::begin(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);

@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -105,6 +105,17 @@ struct ItlAwdlNativeStartResponse {
     uint32_t backend_calls, bsd_interfaces, cleanup_errors, peer_creation_calls;
     uint32_t peer_live_before, peer_live_after;
 };
+// Retain a disabled, unregistered native object across client connections.
+// Create is idempotent while retained; retire prevents recreation this boot.
+enum ItlAwdlNativeSessionOperation { ItlAwdlNativeInspect, ItlAwdlNativeCreate, ItlAwdlNativeRetire };
+enum ItlAwdlNativeSessionState { ItlAwdlNativeUnused, ItlAwdlNativeRetained, ItlAwdlNativeRetired };
+struct ItlAwdlNativeSessionRequest { uint32_t version, operation, reserved[2]; };
+struct ItlAwdlNativeSessionResponse {
+    uint32_t version, state, role, interface_count, peer_count, provider_open;
+    uint32_t controller_pointer, bsd_interfaces, backend_calls, boot_reserved;
+    uint32_t last_error, reserved;
+    uint64_t registry_id;
+};
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
     uint32_t version, flags, register_address, gp2_us;
@@ -135,6 +146,9 @@ static_assert(ItlAwdlDataProbe == 18 && ItlAwdlNativeInit == 19, "append-only na
 static_assert(ItlAwdlNativeStart == 20, "append-only native start ABI");
 static_assert(sizeof(ItlAwdlNativeStartRequest) == 16, "native start request ABI");
 static_assert(sizeof(ItlAwdlNativeStartResponse) == 88, "native start response ABI");
+static_assert(ItlAwdlNativeSession == 21, "append-only native retained session ABI");
+static_assert(sizeof(ItlAwdlNativeSessionRequest) == 16, "native session request ABI");
+static_assert(sizeof(ItlAwdlNativeSessionResponse) == 56, "native session response ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");

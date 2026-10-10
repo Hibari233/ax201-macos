@@ -134,6 +134,58 @@ static int startDenied(io_connect_t client) {
     return result == kIOReturnNotPermitted ? 0 : 1;
 }
 
+static kern_return_t sessionInvoke(io_connect_t client, const ItlAwdlNativeSessionRequest &request,
+    ItlAwdlNativeSessionResponse &out, size_t in = sizeof(ItlAwdlNativeSessionRequest),
+    size_t size = sizeof(ItlAwdlNativeSessionResponse)) {
+    memset(&out, 0, sizeof(out));
+    auto r = IOConnectCallStructMethod(client, ItlAwdlNativeSession, &request, in, &out, &size);
+    if (!r && (size != sizeof(out) || out.version != ITL_AWDL_ABI_VERSION)) return kIOReturnBadArgument;
+    return r;
+}
+
+static int sessionInvalidRequests(io_connect_t client) {
+    unsigned passed = 0, failed = 0;
+    auto check = [&](const char *name, kern_return_t got) {
+        if (got == kIOReturnBadArgument) ++passed;
+        else { ++failed; fprintf(stderr, "%s: 0x%x\n", name, got); }
+    };
+    ItlAwdlNativeSessionRequest r = {ITL_AWDL_ABI_VERSION, ItlAwdlNativeInspect, {0, 0}};
+    ItlAwdlNativeSessionResponse out = {};
+    check("short input", sessionInvoke(client, r, out, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeSession,
+        &out, sizeof(out), nullptr, nullptr));
+    check("short output", sessionInvoke(client, r, out, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", sessionInvoke(client, r, out)); r.version = 1;
+    r.operation = 3; check("operation", sessionInvoke(client, r, out)); r.operation = 0;
+    r.reserved[0] = 1; check("reserved0", sessionInvoke(client, r, out)); r.reserved[0] = 0;
+    r.reserved[1] = 1; check("reserved1", sessionInvoke(client, r, out));
+    printf("{\"invalid_session_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
+    return failed ? 1 : 0;
+}
+
+static int sessionRun(io_connect_t client, uint32_t operation) {
+    ItlAwdlNativeSessionRequest request = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
+    ItlAwdlNativeSessionResponse out = {};
+    auto result = sessionInvoke(client, request, out);
+    if (result) { fprintf(stderr, "Native session: 0x%x\n", result); return 1; }
+    printf("{");
+#define FIELD(name) printf("\"" #name "\":%u,", out.name)
+    FIELD(version); FIELD(state); FIELD(role); FIELD(interface_count); FIELD(peer_count);
+    FIELD(provider_open); FIELD(controller_pointer); FIELD(bsd_interfaces); FIELD(backend_calls);
+    FIELD(boot_reserved); FIELD(last_error);
+#undef FIELD
+    printf("\"registry_id\":%llu,\"native_airdrop\":false}\n", (unsigned long long)out.registry_id);
+    if (out.last_error || out.bsd_interfaces) return 1;
+    if (operation == ItlAwdlNativeCreate)
+        return out.state == ItlAwdlNativeRetained && out.role == 6 &&
+            out.interface_count == 1 && out.peer_count == 1 && out.provider_open &&
+            out.controller_pointer && out.boot_reserved && out.registry_id ? 0 : 1;
+    if (operation == ItlAwdlNativeRetire)
+        return out.state != ItlAwdlNativeRetained && !out.interface_count && !out.peer_count &&
+            !out.provider_open && !out.controller_pointer && !out.registry_id ? 0 : 1;
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const bool selftest = argc == 2 && !strcmp(argv[1], "selftest");
     const bool denied = argc == 2 && !strcmp(argv[1], "denied");
@@ -141,15 +193,25 @@ int main(int argc, char **argv) {
     const bool startSelftest = argc == 2 && !strcmp(argv[1], "start-selftest");
     const bool start = argc == 4 && !strcmp(argv[1], "start");
     const bool startDeniedTest = argc == 2 && !strcmp(argv[1], "start-denied");
+    const bool sessionSelftest = argc == 2 && !strcmp(argv[1], "session-selftest");
+    const bool session = argc == 3 && !strcmp(argv[1], "session");
+    uint32_t operation = ItlAwdlNativeInspect;
+    if (session) {
+        if (!strcmp(argv[2], "create")) operation = ItlAwdlNativeCreate;
+        else if (!strcmp(argv[2], "retire")) operation = ItlAwdlNativeRetire;
+        else if (strcmp(argv[2], "status")) operation = 3;
+    }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
-    if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest) ||
+    if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest) ||
+        (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
         (start && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 4 ||
                    !number(argv[3], &request.stop_after) || request.stop_after > 1))) {
         fprintf(stderr, "Usage: awdl_native_init selftest | denied | run ITERATIONS(1..8) STOP_AFTER(0..2)\n"
                         "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
-                        "Real peer creation requires ITERATIONS=1 and is limited to once per boot.\n");
+                        "       awdl_native_init session-selftest | session status|create|retire\n"
+                        "Real peer creation is limited to once per boot; session create reuses a retained object.\n");
         return 2;
     }
     if ((denied && geteuid() == 0) || (!denied && geteuid() != 0)) {
@@ -169,6 +231,8 @@ int main(int argc, char **argv) {
     if (selftest) { int code = invalidRequests(client); IOServiceClose(client); return code; }
     if (startSelftest) { int code = startInvalidRequests(client); IOServiceClose(client); return code; }
     if (startDeniedTest) { int code = startDenied(client); IOServiceClose(client); return code; }
+    if (sessionSelftest) { int code = sessionInvalidRequests(client); IOServiceClose(client); return code; }
+    if (session) { int code = sessionRun(client, operation); IOServiceClose(client); return code; }
     if (start) { int code = startRun(client, request.iterations, request.stop_after); IOServiceClose(client); return code; }
     ItlAwdlNativeInitResponse out = {};
     result = invoke(client, request, out);

@@ -328,7 +328,7 @@ IOReturn ItlAwdlNativeInterface::probeGated(AirportItlwm *parent, ItlIwx *radio,
         object->release();
         ++out->released;
         if (!initialized) { result = kIOReturnError; break; }
-        if (metaClass->getInstanceCount() || out->provider_open_after || out->method_failures) {
+        if (out->provider_open_after || out->method_failures) {
             result = kIOReturnError;
             break;
         }
@@ -350,11 +350,169 @@ IOReturn ItlAwdlNativeInterface::probeInitialization(AirportItlwm *parent, ItlIw
     if (!gate) return kIOReturnNotReady;
     NativeProbeLease lease;
     if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    auto single = *request;
+    single.iterations = 1;
+    ItlAwdlNativeInitResponse step = {};
     struct Call { AirportItlwm *parent; ItlIwx *radio;
         const ItlAwdlNativeInitRequest *request; ItlAwdlNativeInitResponse *out; } call = {
-            parent, radio, request, out};
-    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            parent, radio, &single, &step};
+    for (uint32_t i = 0; i < request->iterations; ++i) {
+        IOReturn result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            auto call = static_cast<Call *>(argument);
+            return probeGated(call->parent, call->radio, call->request, call->out);
+        }, &call);
+        if (result) return result;
+        // Even init-only power-interest deregistration can defer a release.
+        // Open the gate before waiting, just as the native-start probe does.
+        unsigned waited = 0;
+        while (metaClass->getInstanceCount() && waited < 250) {
+            IOSleep(1);
+            ++waited;
+        }
+        step.live_after = metaClass->getInstanceCount();
+        if (step.live_after) step.last_error = kIOReturnTimeout;
+#define SUM(field) out->field += step.field
+        SUM(attempted); SUM(base_initialized); SUM(virtual_initialized); SUM(released);
+        SUM(methods_checked); SUM(method_failures); SUM(provider_open_after); SUM(provider_opened);
+#undef SUM
+        if (!i) out->live_before = step.live_before;
+        out->live_after = step.live_after;
+        out->role = step.role;
+        out->last_error = step.last_error;
+        if (out->last_error) break;
+    }
+    return kIOReturnSuccess;
+}
+
+void ItlAwdlNativeInterface::describeManaged(AirportItlwm *parent,
+    ItlAwdlNativeSessionResponse *out) {
+    bzero(out, sizeof(*out));
+    out->version = ITL_AWDL_ABI_VERSION;
+    out->boot_reserved = nativePeerAttempted();
+    out->state = out->boot_reserved ? ItlAwdlNativeRetired : ItlAwdlNativeUnused;
+    out->interface_count = metaClass->getInstanceCount();
+    auto peerClass = nativePeerClass();
+    out->peer_count = peerClass ? peerClass->getInstanceCount() : 0;
+    out->controller_pointer = parent->getAwdlInterface() != nullptr;
+    auto object = parent->nativeAwdlInterface;
+    if (!object) return;
+    out->state = ItlAwdlNativeRetained;
+    out->role = static_cast<uint32_t>(object->getInterfaceRole());
+    out->provider_open = parent->isOpen(object);
+    out->bsd_interfaces = object->getBSDInterface() != nullptr;
+    out->backend_calls = object->backendCalls;
+    out->registry_id = object->getRegistryEntryID();
+}
+
+void ItlAwdlNativeInterface::releaseManagedGated(AirportItlwm *parent) {
+    auto object = parent->nativeAwdlInterface;
+    if (!object) return;
+    parent->nativeAwdlInterface = nullptr;
+    object->stop(parent);
+    object->disposeInitializedResources();
+    object->detach(parent);
+    object->release();
+    auto radio = OSDynamicCast(ItlIwx, parent->fHalService);
+    if (radio) radio->awdlNativeInterfaceActive = false;
+}
+
+void ItlAwdlNativeInterface::releaseManaged(AirportItlwm *parent) {
+    if (!parent || !parent->nativeAwdlInterface) return;
+    auto radio = OSDynamicCast(ItlIwx, parent->fHalService);
+    auto gate = radio ? radio->getMainCommandGate() : nullptr;
+    if (gate) {
+        gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+            releaseManagedGated(static_cast<AirportItlwm *>(argument));
+            return kIOReturnSuccess;
+        }, parent);
+    } else {
+        // Provider teardown fallback only. Normal stop calls this before the
+        // radio gate/work queue are removed; user clients cannot use this path.
+        releaseManagedGated(parent);
+    }
+}
+
+IOReturn ItlAwdlNativeInterface::managedSessionGated(AirportItlwm *parent, ItlIwx *radio,
+    uint32_t operation, ItlAwdlNativeSessionResponse *out) {
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    if (parent->isInactive()) return kIOReturnNotReady;
+    ItlAwdlStatusResponse status = {};
+    auto result = radio->awdlCommand(parent, ItlAwdlStatus, nullptr, &status);
+    if (result) return result;
+    if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+    if (operation == ItlAwdlNativeRetire) releaseManagedGated(parent);
+    if (operation == ItlAwdlNativeCreate && !parent->nativeAwdlInterface) {
+        if (nativePeerAttempted()) return kIOReturnNotPermitted;
+        auto peerClass = nativePeerClass();
+        if (!peerClass) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle || parent->getAwdlInterface() ||
+            metaClass->getInstanceCount() || peerClass->getInstanceCount()) return kIOReturnBusy;
+        radio->awdlNativeInterfaceActive = true;
+        auto object = new ItlAwdlNativeInterface;
+        if (!object) {
+            radio->awdlNativeInterfaceActive = false;
+            return kIOReturnNoMemory;
+        }
+        ether_addr address;
+        memcpy(address.ether_addr_octet, status.local_mac, sizeof(address.ether_addr_octet));
+        address.ether_addr_octet[0] = (address.ether_addr_octet[0] | 2) & ~1;
+        address.ether_addr_octet[5] ^= 0x80;
+        ItlAwdlNativeInitResponse initialized = {};
+        bool ready = object->initializeForProbe(parent, &address, 2, &initialized);
+        bool attached = ready && object->attach(parent);
+        if (attached) {
+            object->startAllowed = true;
+            ready = object->start(parent);
+            auto state = object->nativeStartState();
+            ready = ready && state && state->peerManager &&
+                state->peerManager->getMetaClass() == peerClass &&
+                peerClass->getInstanceCount() == 1 && parent->getAwdlInterface() == object &&
+                !object->getBSDInterface();
+        }
+        if (!ready || !attached) {
+            object->stop(parent);
+            object->disposeInitializedResources();
+            if (attached) object->detach(parent);
+            object->release();
+            radio->awdlNativeInterfaceActive = false;
+            return kIOReturnError;
+        }
+        // The controller owns the allocation reference. Client close is not
+        // native teardown. No registerService, BSD registration or link enable.
+        parent->nativeAwdlInterface = object;
+    }
+    describeManaged(parent, out);
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlAwdlNativeInterface::managedSession(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeSessionRequest *request, ItlAwdlNativeSessionResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlNativeRetire || request->reserved[0] || request->reserved[1])
+        return kIOReturnBadArgument;
+    auto gate = radio->getMainCommandGate();
+    if (!gate) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; uint32_t operation;
+        ItlAwdlNativeSessionResponse *out; } call = {parent, radio, request->operation, out};
+    auto result = gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
         auto call = static_cast<Call *>(argument);
-        return probeGated(call->parent, call->radio, call->request, call->out);
+        return managedSessionGated(call->parent, call->radio, call->operation, call->out);
     }, &call);
+    if (result) return result;
+    if (request->operation == ItlAwdlNativeRetire) {
+        auto peerClass = nativePeerClass();
+        unsigned waited = 0;
+        while ((metaClass->getInstanceCount() || (peerClass && peerClass->getInstanceCount())) && waited < 250) {
+            IOSleep(1);
+            ++waited;
+        }
+        out->interface_count = metaClass->getInstanceCount();
+        out->peer_count = peerClass ? peerClass->getInstanceCount() : 0;
+        if (out->interface_count || out->peer_count) out->last_error = kIOReturnTimeout;
+    }
+    return kIOReturnSuccess;
 }

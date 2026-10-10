@@ -218,6 +218,32 @@ The next source revision restricts real creation to one attempt per boot; its
 hardware validation must be reported separately. Native packet queues,
 BSD registration and AirDrop transfers remain unimplemented.
 
+## Revision 13c containment observations (2026-10-10)
+
+The same machine loaded source `cb67c9df35bf8963cfb6a87d2544c8ca8d12f213`,
+binary `ab579ce06ec17ee3d34c73f370547e812573511149f97aad0782aabe44aa2e03`,
+UUID `1519EBC5-8005-31D5-954A-D353A6A0B1DE`.
+[Its CI](https://github.com/Hibari233/ax201-macos/actions/runs/38034689592)
+passed all three jobs; the actual compiled native class matched all 560 audited
+slots and 63 backend methods.
+
+Seventeen malformed requests passed. An eight-cycle init-only test stopped at
+cycle five with a still-counted interface and no method/open error; all 640
+dispatch checks had passed. The following userspace count was zero. This is an
+incomplete initialization regression result, not an eight-cycle pass. The next
+source revision applies the outside-gate cleanup wait to init-only requests as
+well as started objects.
+
+After confirming zero instances, four injected failures, one real start/stop,
+and four more injected failures passed. Three separate reopened-client attempts
+to recreate the real manager were rejected with `kIOReturnNotPermitted`,
+including an attempt after the later injected failures. Final instance counts
+were zero. The host stayed online with no new panic report; Wi-Fi-route router
+checks passed 10/10 and retained display/GPU checks passed at 240 Hz. The initial
+combined harness stopped at the init result, so its planned concurrent-denial
+test did not run. These observations qualify containment only, not repeated
+native creation or AirDrop.
+
 ## Required hardware matrix before a binary release
 
 | Test | Current qualification |

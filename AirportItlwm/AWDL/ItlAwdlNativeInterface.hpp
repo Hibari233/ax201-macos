@@ -16,6 +16,9 @@ public:
         const ItlAwdlNativeInitRequest *, ItlAwdlNativeInitResponse *);
     static IOReturn probeStart(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeStartRequest *, ItlAwdlNativeStartResponse *);
+    static IOReturn managedSession(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeSessionRequest *, ItlAwdlNativeSessionResponse *);
+    static void releaseManaged(AirportItlwm *);
     void free() override;
     bool start(IOService *) override;
     void stop(IOService *) override;
@@ -50,4 +53,8 @@ private:
         const ItlAwdlNativeInitRequest *, ItlAwdlNativeInitResponse *);
     static IOReturn probeStartGated(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeStartRequest *, ItlAwdlNativeStartResponse *);
+    static IOReturn managedSessionGated(AirportItlwm *, ItlIwx *, uint32_t,
+        ItlAwdlNativeSessionResponse *);
+    static void releaseManagedGated(AirportItlwm *);
+    static void describeManaged(AirportItlwm *, ItlAwdlNativeSessionResponse *);
 };

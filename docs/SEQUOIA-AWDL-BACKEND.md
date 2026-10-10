@@ -66,6 +66,11 @@ In 24H32 the getter returns six address bytes in the return register and native
 declaration now returns by value; the probe implements an in-memory address so
 the getter also works before `start()` creates the native MAC address agent.
 
+Initialization also releases one object per gate acquisition and waits outside
+the gate for the instance count to settle, for at most 250 ms per object.
+Deregistering power interest can defer a release even when `start()` was never
+called; a tight loop under one gate can otherwise mistake this for a leak.
+
 The initialization selector never calls `start()`: no peer manager, BSD `awdl0`,
 packet queues, RF changes, or native AirDrop capability are registered. The compiled
 class's 560 vtable entries (including the 63 backend slots) were compared with
@@ -138,6 +143,37 @@ This limits a diagnostic that proved unsafe; it does not qualify repeated
 native teardown. A future operational backend must retain one native manager
 through multiple discovery/transfer sessions. Recreating it after teardown
 remains unavailable for this build.
+
+## Retained native object diagnostic
+
+Root-only selector 21 implements that lifetime separately from the one-shot
+probe. It creates one disabled, unregistered native interface on explicit
+request and retains it in the controller. Closing a diagnostic client leaves
+the object alive. Repeated `create` requests return the same object and registry
+ID; they do not repeat native initialization. Capability bit 2048 describes this
+diagnostic, not networking support.
+
+```
+sudo build/tools/awdl_native_init session-selftest
+sudo build/tools/awdl_native_init session status
+sudo build/tools/awdl_native_init session create
+# Reopen clients and inspect/reuse this same object.
+sudo build/tools/awdl_native_init session create
+sudo build/tools/awdl_native_init session retire
+```
+
+`retire` is terminal for this boot and uses the audited stop/disposal path. It
+waits outside the gate for final release. Controller stop also disposes its child
+before removing the radio/work queue. The retained path and the earlier real
+start probe share the same boot latch, so testing one consumes the other's
+creation opportunity. Failed injected factories and init-only tests do not.
+
+The shared radio gate excludes exclusive monitor diagnostics while this object
+exists; normal STA Wi-Fi remains the intended active radio path. That exclusion
+is not concurrent STA/AWDL scheduling. No BSD interface, packet queues, service
+registration, radio activation or native AirDrop capability is enabled. Runtime
+qualification must verify stable identity across clients, disposal, denial of
+recreation, and ordinary Wi-Fi health on the exact binary.
 
 Reports include settled native peer-manager instance counts, balanced opens, disposal,
 backend call counts and unexpected BSD interfaces. A passing lifecycle probe

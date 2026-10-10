@@ -38,7 +38,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 2047; // Adds native start/stop probe. No native AirDrop.
+            out->capabilities = 4095; // Adds retained native object diagnostics. No native AirDrop.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -155,6 +155,9 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
     if (!r || !owner || r->version != ITL_AWDL_ABI_VERSION || r->reserved ||
         r->padding[0] || r->padding[1] || r->dwell_ms < 100 || r->dwell_ms > ITL_AWDL_MAX_DWELL_MS ||
         !ItlAwdl::unicastMac(r->peer)) return kIOReturnBadArgument;
+    // A retained native object and exclusive radio diagnostics are alternative
+    // development paths. Both change this guard under the same command gate.
+    if (awdlNativeInterfaceActive) return kIOReturnBusy;
     uint32_t channel = r->channel;
     if (linked) {
         if (channel) return kIOReturnBadArgument;

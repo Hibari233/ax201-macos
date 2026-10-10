@@ -163,6 +163,9 @@ public:
     void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t, bool);
     void awdlCountryHint(uint16_t, uint8_t);
 private:
+    // Not part of the radio diagnostic context: radio resets must not erase
+    // ownership of a native object retained by the controller.
+    bool awdlNativeInterfaceActive = false;
     struct {
         bool ready = false;
         bool rejected = false;

@@ -14,6 +14,9 @@
 
 #include "AirportItlwmSkywalkInterface.hpp"
 #include "IOPCIEDeviceWrapper.hpp"
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+#include "AWDL/ItlAwdlNativeInterface.hpp"
+#endif
 
 #define super IO80211Controller
 OSDefineMetaClassAndStructors(AirportItlwm, IO80211Controller);
@@ -24,6 +27,9 @@ IOCommandGate *_fCommandGate;
 
 void AirportItlwm::releaseAll()
 {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    ItlAwdlNativeInterface::releaseManaged(this);
+#endif
 #ifdef AIRPORT_WCL
     if (fNetIf)
         static_cast<AirportItlwmSkywalkInterface *>(fNetIf)->stopWCL();
@@ -471,6 +477,10 @@ bool AirportItlwm::start(IOService *provider)
 void AirportItlwm::stop(IOService *provider)
 {
     XYLog("%s\n", __PRETTY_FUNCTION__);XYLog("%s\n", __PRETTY_FUNCTION__);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Stop the child while its controller, radio and native work queue exist.
+    ItlAwdlNativeInterface::releaseManaged(this);
+#endif
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
 #ifdef AIRPORT_WCL
     if (fNetIf)
