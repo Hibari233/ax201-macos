@@ -1583,3 +1583,31 @@ normally called from an interface-state transition absent in this diagnostic.
 Whether the receiving Mac rejects this declaration is not yet established.
 WPA2 passed 24/24 baseline pings and health checks passed after inspection.
 Native synchronization, discovery, RX handoff and AirDrop remain unavailable.
+
+## Native social-channel initialization — 2026-10-11
+
+Source `65e081f27ce1ae5617f5cb4f0f6775919d27e112` (revision 57), binary
+`ac66dbd10ad9ea2cd1bbf0e1560c19725fdd7e8e482d01d491039d8250cc65c2`, loaded
+UUID `FD4E9E5C-54EA-358D-A211-EEF0719E29FC`.
+[Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38077429569)
+passed all three jobs. Local UBSan/Python tests, both ABI comparisons and the
+384-contract baseline passed. Rollback is revision 56.
+
+Calling the native channel selector changed its actual social map from zero
+to 1 (channel 6), and the generated data-path TLV now contains the same map.
+Election identity checks and other recorded template fields were unchanged.
+This verifies the missing initialization step; it did not establish discovery.
+
+One discovery-profile series completed all four unicast frames and stopped
+with no firmware-fault events, failed frames, pending frames or aborts. The
+first encoded-clock-to-completion bound was 70,270 us; the remaining three
+fresh-clock-to-completion bounds were 2,123, 1,364 and 1,569 us. The original
+5 ms timing qualification therefore still failed. The receiving Mac's native
+database contained no transmitter entry in 211 observations, with its own
+entry present throughout. Its AWDL synchronization was enabled, and its
+AirDrop window was already open with Everyone selected.
+
+WPA2 passed 33/33 pings across the baseline and TX harness. The retained
+manager was unchanged and GPU/display/power checks passed after restoration.
+Separate listener/P2P receive-only regression leases were not repeated for
+this template-only change. Native AirDrop remains unavailable.
