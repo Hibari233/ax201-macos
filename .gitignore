@@ -6,3 +6,13 @@ project.xcworkspace
 FwBinary.cpp
 *.pyc
 MacKernelSDK
+__pycache__/
+.venv/
+artifacts/
+logs/
+diagnostics/
+*.pcap
+*.pcapng
+*.kc
+*.dSYM/
+compile_commands.json

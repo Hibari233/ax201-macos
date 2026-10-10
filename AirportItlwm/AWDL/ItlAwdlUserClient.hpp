@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+#include <IOKit/IOUserClient.h>
+#include <AWDL/ItlAwdlABI.h>
+class AirportItlwm;
+class ItlIwx;
+class ItlAwdlUserClient : public IOUserClient {
+    OSDeclareDefaultStructors(ItlAwdlUserClient)
+public:
+    bool initWithTask(task_t, void *, UInt32, OSDictionary *) override;
+    bool start(IOService *) override;
+    void stop(IOService *) override;
+    IOReturn clientClose() override;
+    IOReturn externalMethod(uint32_t, IOExternalMethodArguments *, IOExternalMethodDispatch *, OSObject *, void *) override;
+private:
+    AirportItlwm *driver;
+    ItlIwx *radio;
+    static IOReturn status(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn begin(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn end(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn read(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn readRejected(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn probe(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn txStatus(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn regStatus(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn readTimed(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn clock(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn runTest(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn runStatus(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn prepareCountry(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn beginLinked(OSObject *, void *, IOExternalMethodArguments *);
+    static IOReturn linkedStatus(OSObject *, void *, IOExternalMethodArguments *);
+};

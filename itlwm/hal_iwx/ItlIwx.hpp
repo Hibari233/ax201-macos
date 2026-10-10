@@ -1,3 +1,4 @@
+// Modified 2026-10-10: optional AX201 AWDL diagnostic lifecycle hooks.
 /*
 * Copyright (C) 2020  钟先耀
 *
@@ -140,11 +141,81 @@
 #include <HAL/ItlHalService.hpp>
 #include <HAL/ItlDriverInfo.hpp>
 #include <HAL/ItlDriverController.hpp>
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+#include <AWDL/ItlAwdlABI.h>
+#include <AWDL/AwdlClock.h>
+#include <IOKit/IOTimerEventSource.h>
+#endif
 
 class ItlIwx : public ItlHalService, ItlDriverInfo, ItlDriverController {
     OSDeclareDefaultStructors(ItlIwx)
     
 public:
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    IOReturn awdlCommand(OSObject *, uint32_t, const void *, void *);
+    bool awdlActive() const { return awdl.session == ItlAwdlStarting || awdl.session == ItlAwdlListening; }
+    bool awdlLinked() const { return awdl.linked && awdlActive(); }
+    bool awdlCommandBusy() const { return awdl.commandBusy; }
+    void awdlStop(uint32_t reason, uint32_t error = 0);
+    void awdlDetach();
+    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t);
+    void awdlCountryHint(uint16_t, uint8_t);
+private:
+    struct {
+        bool ready = false;
+        bool rejected = false;
+        OSObject *owner = nullptr; // Identity only, cleared by clientClose/stop.
+        IOTimerEventSource *timer = nullptr;
+        IOTimerEventSource *runTimer = nullptr;
+        ItlAwdlTimedFrameResponse *ring = nullptr;
+        uint32_t head = 0, count = 0, session = 0, channel = 0;
+        uint32_t lastError = 0, stopReason = 0;
+        uint64_t rxTotal = 0, rxAwdl = 0, rxPeer = 0, rxDropped = 0, rxInvalid = 0;
+        uint64_t lastPeerRxUs = 0, lastProbeUs = 0;
+        uint32_t lastPeerGp2 = 0;
+        uint64_t deadlineUs = 0;
+        bool commandBusy = false, pendingWindow = false;
+        bool linked = false, linkedFilterEnabled = false;
+        int linkedGeneration = -1;
+        uint32_t linkedRestoreError = 0, linkedId = 0, linkedColor = 0;
+        uint8_t linkedBssid[6] = {};
+        uint32_t epoch = 0, targetGp2 = 0, lastTargetGp2 = 0;
+        bool hasLastTarget = false;
+        ItlAwdl::ScheduleSlot targetSlot = {};
+        ItlAwdl::ScheduleTracker schedule;
+        ItlAwdl::ClockCorrelation clock;
+        ItlAwdlRunStatusResponse run = {};
+        ItlAwdlTxStatusResponse tx = {};
+        uint32_t mccQueries = 0, mccError = 0;
+        uint64_t lastMccQueryUs = 0;
+        char mccCountry[4] = {};
+        uint16_t countryHint = 0;
+        uint8_t countrySource = 0;
+        uint64_t countryHintUs = 0;
+        int countryHintGeneration = -1;
+        uint16_t appliedCountryHint = 0;
+        uint8_t appliedCountrySource = 0;
+        bool mccNeedsRefresh = false;
+        uint8_t peer[6] = {};
+        ieee80211_channel *savedChannel = nullptr;
+        ieee80211_opmode savedMode = IEEE80211_M_STA;
+        uint32_t savedAutoJoin = 0;
+    } awdl;
+    struct AwdlCall { OSObject *owner; uint32_t selector; const void *input; void *output; };
+    static IOReturn awdlCommandGated(OSObject *, void *, void *, void *, void *);
+    static void awdlTimeout(OSObject *, IOTimerEventSource *);
+    static void awdlRunTimeout(OSObject *, IOTimerEventSource *);
+    IOReturn awdlBegin(OSObject *, const ItlAwdlBeginRequest *, bool linked = false);
+    bool awdlLinkMatches(bool requireChannel = true) const;
+    void awdlFinishLinkedStop();
+    IOReturn awdlProbe(OSObject *, bool scheduled = false);
+    IOReturn awdlReadClock(ItlAwdlClockResponse *);
+    IOReturn awdlRun(OSObject *, const ItlAwdlRunRequest *);
+    IOReturn awdlRefreshCountry(OSObject *, bool station = false);
+    IOReturn awdlRetune(uint32_t);
+    void awdlRunTick();
+public:
+#endif
     
     //kext
     void free() override;

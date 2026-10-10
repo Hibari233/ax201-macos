@@ -1,3 +1,4 @@
+// Modified 2026-10-10: optional AX201 AWDL diagnostic lifecycle hooks.
 //
 //  WCL.cpp
 //  AirportItlwm
@@ -126,6 +127,21 @@ IOReturn AirportItlwmSkywalkInterface::wclCommand(OSObject *, void *a0, void *a1
     auto self = static_cast<AirportItlwmSkywalkInterface *>(a0);
     if (self->wclStopping)
         return kIOReturnNotReady;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    auto awdlRadio = OSDynamicCast(ItlIwx, self->fHalService);
+    // All radio-mutating WCL requests share this gate with the diagnostic session.
+    if (awdlRadio && awdlRadio->awdlActive()) {
+        if (awdlRadio->awdlLinked()) {
+            // The linked diagnostic yields to normal scans/joins/leaves.
+            // Key installation remains available throughout the session.
+            if (uintptr_t(a1) <= 4) {
+                if (awdlRadio->awdlCommandBusy()) return kIOReturnBusy;
+                awdlRadio->awdlStop(ItlAwdlWifiRequest);
+            }
+        } else if (uintptr_t(a1) <= 4 || uintptr_t(a1) == 8 || uintptr_t(a1) == 9)
+            return kIOReturnBusy;
+    }
+#endif
     switch (uintptr_t(a1)) {
         case 12:
             self->handleWCLEvent(int(uintptr_t(a2)), nullptr);

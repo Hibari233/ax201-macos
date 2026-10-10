@@ -1,3 +1,4 @@
+// Modified 2026-10-10: optional AX201 AWDL diagnostic lifecycle hooks.
 //
 //  AirportItlwmV2.hpp
 //  AirportItlwm-Sonoma
@@ -77,6 +78,9 @@ IOReturn get##REQ(OSObject *object, struct DATA_TYPE *data);
 IOReturn set##REQ(OSObject *object, struct DATA_TYPE *data);
     
 public:
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    IOReturn newUserClient(task_t, void *, UInt32, OSDictionary *, IOUserClient **) override;
+#endif
     virtual bool init(OSDictionary *properties) override;
     virtual void free() override;
     virtual IOService* probe(IOService* provider, SInt32* score) override;

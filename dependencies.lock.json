@@ -1,0 +1,10 @@
+{
+  "upstream": {
+    "url": "https://github.com/laobamac/itlwm.git",
+    "commit": "9bc4b4d6e5f5f96d0687d42385b77f81768b9e83"
+  },
+  "MacKernelSDK": {
+    "url": "https://github.com/acidanthera/MacKernelSDK.git",
+    "commit": "3f750085caa17ec3a7880f11c11bf4f48cd6a164"
+  }
+}

@@ -4,6 +4,7 @@
 #
 #  Created by qcwap on 2020/9/3.
 #  Copyright © 2020 钟先耀. All rights reserved.
+# Modified 2026-10-10: stable firmware ordering and parent directory creation.
 
 import zlib
 import os
@@ -66,10 +67,12 @@ def write_single_file(target_file, path, file):
 def process_files(target_file, dir):
     if not os.path.exists(target_file):
         if not os.path.exists(os.path.dirname(target_file)):
-            os.mkdirs(os.path.dirname(target_file))
+            os.makedirs(os.path.dirname(target_file))
     target_file_handle = open(target_file, "w")
     target_file_handle.write(copyright)
     for root, dirs, files in os.walk(dir):
+        dirs.sort()
+        files.sort()
         for file in files:
             path = os.path.join(root, file)
             write_single_file(target_file_handle, path, file)

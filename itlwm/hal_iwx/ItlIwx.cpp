@@ -1,3 +1,4 @@
+// Modified 2026-10-10: optional AX201 AWDL diagnostic lifecycle hooks.
 /*
  * Copyright (C) 2020  钟先耀
  *
@@ -156,12 +157,21 @@ bool ItlIwx::attach(IOPCIDevice *device)
         releaseAll();
         return false;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    awdl.ready = true;
+    getController()->setProperty("ItlAwdlExperimentalABI", ITL_AWDL_ABI_VERSION, 32);
+    getController()->setProperty("ItlAwdlExperimentalRevision", 9, 32);
+    getController()->setProperty("ItlAwdlExperimentalBuild", 2, 32);
+#endif
     return true;
 }
 
 void ItlIwx::
 detach(IOPCIDevice *device)
 {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    awdlDetach();
+#endif
 #ifdef AIRPORT_VTD
     getMainCommandGate()->runAction(
         [](OSObject *, void *arg0, void *arg1, void *, void *) -> IOReturn {
@@ -258,6 +268,13 @@ getDriverController()
 
 IOReturn ItlIwx::enable(IONetworkInterface *netif)
 {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (!getMainWorkLoop()->inGate())
+        return getMainCommandGate()->runAction([](OSObject *, void *p, void *n, void *, void *) -> IOReturn {
+            return static_cast<ItlIwx *>(p)->enable(static_cast<IONetworkInterface *>(n));
+        }, this, netif);
+    awdlStop(ItlAwdlPowerChange);
+#endif
     XYLog("%s\n", __PRETTY_FUNCTION__);
     struct _ifnet *ifp = &com.sc_ic.ic_ac.ac_if;
     if (ifp->if_flags & IFF_UP) {
@@ -272,6 +289,13 @@ IOReturn ItlIwx::enable(IONetworkInterface *netif)
 
 IOReturn ItlIwx::disable(IONetworkInterface *netif)
 {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (!getMainWorkLoop()->inGate())
+        return getMainCommandGate()->runAction([](OSObject *, void *p, void *n, void *, void *) -> IOReturn {
+            return static_cast<ItlIwx *>(p)->disable(static_cast<IONetworkInterface *>(n));
+        }, this, netif);
+    awdlStop(ItlAwdlPowerChange);
+#endif
     XYLog("%s\n", __FUNCTION__);
     struct _ifnet *ifp = &com.sc_ic.ic_ac.ac_if;
     if (!(ifp->if_flags & IFF_UP)) {
@@ -5828,6 +5852,12 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         desc_size = sizeof(struct iwx_rx_mpdu_desc);
     else
         desc_size = IWX_RX_DESC_SIZE_V1;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (maxlen < desc_size) {
+        mbuf_freem(m);
+        return;
+    }
+#endif
     
     if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)) ||
         !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK))) {
@@ -5888,12 +5918,49 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
             hdrlen += IEEE80211_CCMP_HDRLEN;
         }
         
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (hdrlen > len || len - hdrlen < 2) {
+            ic->ic_stats.is_rx_tooshort++;
+            mbuf_freem(m);
+            return;
+        }
+#endif
         //        memmove(m->m_data + 2, m->m_data, hdrlen);
         memmove((uint8_t*)mbuf_data(m) + 2, mbuf_data(m), hdrlen);
         mbuf_adj(m, 2);
     }
     
     memset(&rxi, 0, sizeof(rxi));
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlLinked() && ic->ic_opmode == IEEE80211_M_STA && awdlLinkMatches()) {
+        uint32_t channel = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ? desc->v3.channel : desc->v1.channel;
+        uint32_t gp2 = le32toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                              desc->v3.gp2_on_air_rise : desc->v1.gp2_on_air_rise);
+        uint64_t tsf = le64toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                             desc->v3.tsf_on_air_rise : desc->v1.tsf_on_air_rise);
+        // Observe without changing ownership or length. STA firmware does
+        // not append FCS. Normal decrypt/reorder/net80211 processing follows.
+        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf);
+    }
+    if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
+        uint32_t channel = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ? desc->v3.channel : desc->v1.channel;
+        // iwx_mac_ctxt_cmd enables IWX_MAC_FILTER_IN_CRC32 for the
+        // listener MAC. Firmware appends FCS; CRC_OK was checked above.
+        // The diagnostic ABI exposes a bare 802.11 frame without FCS.
+        if (mbuf_pkthdr_len(m) < IEEE80211_CRC_LEN) {
+            mbuf_freem(m);
+            return;
+        }
+        mbuf_adj(m, -IEEE80211_CRC_LEN);
+        uint32_t gp2 = le32toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                              desc->v3.gp2_on_air_rise : desc->v1.gp2_on_air_rise);
+        uint64_t tsf = le64toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                             desc->v3.tsf_on_air_rise : desc->v1.tsf_on_air_rise);
+        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf);
+        mbuf_freem(m);
+        return;
+    }
+#endif
     
     /*
      * Hardware de-aggregates A-MSDUs and copies the same MAC header
@@ -5985,6 +6052,16 @@ iwx_rx_tx_cmd_single(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     KASSERT(tx_resp->frame_count == 1, "tx_resp->frame_count == 1");
     
     txfail = (status != IWX_TX_STATUS_SUCCESS);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR &&
+        tx_resp->tx_queue == sc->first_data_qid && awdl.tx.pending) {
+        ++awdl.tx.completed;
+        --awdl.tx.pending;
+        if (txfail) ++awdl.tx.failed;
+        else ++awdl.tx.succeeded;
+        awdl.tx.last_firmware_status = status;
+    }
+#endif
     
     if (txfail) {
         XYLog("%s %d OUTPUT_ERROR type=%d status=%d\n", __FUNCTION__, __LINE__, txd->type, status);
@@ -6835,6 +6912,12 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     const struct iwx_rate *rinfo;
     int type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     int min_ridx = iwx_rval2ridx(ieee80211_min_basic_rate(ic));
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // AWDL management frames use the 6 Mbit/s OFDM basic rate, including
+    // channel 6. Do not inherit an infrastructure BSS's CCK basic rate.
+    if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR)
+        min_ridx = iwx_rval2ridx(12);
+#endif
     int ridx, rate_flags;
     uint8_t cmdver;
     uint8_t hwrate;
@@ -6875,6 +6958,11 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
             hwrate = ridx;
         } else {
             rate_flags |= IWX_RATE_MCS_LEGACY_OFDM_MSK;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+            if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR)
+                hwrate = iwx_rate2idx(rinfo->rate);
+            else
+#endif
             hwrate = iwx_rate2idx(iwx_ridx2rate(rs, ridx) & IEEE80211_RATE_VAL);
         }
     } else if (IWX_RIDX_IS_CCK(ridx))
@@ -8427,6 +8515,11 @@ iwx_mcc_update(struct iwx_softc *sc, struct iwx_mcc_chub_notif *notif)
 {
    struct ieee80211com *ic = &sc->sc_ic;
    struct _ifnet *ifp = IC2IFP(ic);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Notification context only records data. A bounded AWDL command can
+    // later request the firmware's profile from the owning command gate.
+    awdlCountryHint(le16toh(notif->mcc), notif->source_id);
+#endif
 
     snprintf(sc->sc_fw_mcc, sizeof(sc->sc_fw_mcc), "%c%c",
              (le16toh(notif->mcc) & 0xff00) >> 8, le16toh(notif->mcc) & 0xff);
@@ -8749,6 +8842,10 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
     if (ni->ni_flags & IEEE80211_NODE_HE) {
         cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_11AX);
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlLinked() && ic->ic_opmode == IEEE80211_M_STA && assoc)
+        cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_CONTROL_AND_MGMT);
+#endif
     
     return iwx_send_cmd_pdu(sc, IWX_MAC_CONTEXT_CMD, 0, sizeof(cmd), &cmd);
 }
@@ -8918,6 +9015,12 @@ iwx_bgscan(struct ieee80211com *ic)
     struct iwx_softc *sc = (struct iwx_softc *)IC2IFP(ic)->if_softc;
     ItlIwx *that = container_of(sc, ItlIwx, com);
     int err;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (that->awdlLinked()) {
+        if (that->awdlCommandBusy()) return EBUSY;
+        that->awdlStop(ItlAwdlWifiRequest);
+    }
+#endif
     
     if (sc->sc_flags & IWX_FLAG_SCANNING)
         return 0;
@@ -9632,9 +9735,22 @@ iwx_auth(struct iwx_softc *sc)
     }
     
     if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // ADD_STA v12+ no longer reserves the auxiliary TX queue. The
+        // firmware allocates queue 1 to the first monitor station (as it
+        // already does for the infrastructure management queue).
+        int version = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_ADD_STA);
+        int monitor_qid = IWX_DQA_INJECT_MONITOR_QUEUE;
+        if (version != IWX_FW_CMD_VER_UNKNOWN && version >= 12)
+            --monitor_qid;
+        sc->first_data_qid = monitor_qid;
+        err = iwx_enable_txq(sc, IWX_MONITOR_STA_ID, monitor_qid,
+                             IWX_MGMT_TID, sc->txq[monitor_qid].ring_count);
+#else
         err = iwx_enable_txq(sc, IWX_MONITOR_STA_ID,
                              IWX_DQA_INJECT_MONITOR_QUEUE, IWX_MGMT_TID,
                              sc->txq[IWX_DQA_INJECT_MONITOR_QUEUE].ring_count);
+#endif
         if (err)
             goto rm_sta;
         return 0;
@@ -10076,6 +10192,10 @@ iwx_newstate_task(void *psc)
         splx(s);
         return;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (that->awdlLinked() && nstate != IEEE80211_S_RUN)
+        that->awdlStop(ItlAwdlLinkChanged);
+#endif
     
     if (ostate == IEEE80211_S_SCAN) {
         if (nstate == ostate) {
@@ -10150,6 +10270,17 @@ iwx_newstate_task(void *psc)
     
 out:
     if (generation == sc->sc_generation && (sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (that->awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
+            if (err) that->awdlStop(ItlAwdlRadioError, err);
+            else {
+                sc->sc_newstate(ic, nstate, arg);
+                if (nstate == IEEE80211_S_RUN) that->awdl.session = ItlAwdlListening;
+            }
+            splx(s);
+            return;
+        }
+#endif
         if (err)
             task_add(systq, &sc->init_task);
         else
@@ -10451,6 +10582,13 @@ iwx_send_update_mcc_cmd(struct iwx_softc *sc, const char *alpha2)
 
     /* Update channel map for net80211 and our scan configuration. */
     iwx_init_channel_map(sc, NULL, resp->channels, resp->n_channels);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlActive()) {
+        uint16_t mcc = le16toh(resp->mcc);
+        awdl.mccCountry[0] = char(mcc >> 8);
+        awdl.mccCountry[1] = char(mcc);
+    }
+#endif
     
 out:
     iwx_free_resp(sc, &hcmd);
@@ -10852,6 +10990,9 @@ iwx_stop(struct _ifnet *ifp)
     
     sc->sc_flags |= IWX_FLAG_SHUTDOWN; /* Disallow new tasks. */
     sc->sc_generation++;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlLinked()) awdlStop(ItlAwdlLinkChanged);
+#endif
     getMainCommandGate()->commandWakeup(&sc->sc_uc.uc_intr);
     getMainCommandGate()->commandWakeup(&sc->sc_init_complete);
     getMainCommandGate()->commandWakeup(&ic->ic_state);
@@ -13695,6 +13836,13 @@ iwx_init_task(void *arg1)
         return;
     }
     struct _ifnet *ifp = &sc->sc_ic.ic_if;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (that->awdlActive()) {
+        bool exclusive = !that->awdlLinked();
+        that->awdlStop(ItlAwdlRadioError, EIO);
+        if (exclusive) return;
+    }
+#endif
 
     int s = splnet();
     int generation = sc->sc_generation;

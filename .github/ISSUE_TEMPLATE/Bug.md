@@ -1,31 +1,31 @@
 ---
-name: Bug report
-about: Report a bug
+name: AX201 bug report
+about: A reproducible problem with this fork
 labels: ''
 assignees: ''
 ---
 
-<!---WARNING!!! YOUR ISSUE WILL BE CLOSED AND DELETED IMMEDIATELY IF YOU DID NOT USE THE FOLLOWING TEMPLATE--->
+## Environment
 
-**Have You Read Our Docs**
-<!---Yes or No--->
+- Source commit and build variant (`wifi` / `awdl`):
+- macOS version and build number:
+- Adapter model and PCI ID:
+- Kernel extension version:
+- Connection: 2.4 / 5 GHz; WPA2 / transition / WPA3; PMF optional / required:
 
-**Are You Reporting A Bug**
-<!---Yes or No--->
+## Reproduction
 
-**Environment**
+1.
+2.
 
-- Kext Version: 
-- WiFi Card Model: 
-- PCI Product ID: 
-- macOS Version: 
+Expected behavior:
+Actual behavior:
+Last working commit, if known:
 
-**Description**
-<!---A clear and concise description of what the bug is--->
+## Evidence
 
-**Bug Report Archive**
-<!---Open HeliPort while clicking Option, click "create diagnostic report", then drag and drop the zip file into this window--->
-<!---Read this guide if you are using AirportItlwm http://docs.oiw.workers.dev/itlwm/Troubleshooting.html#manually-for-airportitlwm--->
+Include relevant, redacted error messages and the build manifest. Do not attach
+passwords, an entire EFI folder, kernel collections, raw packet captures, or
+unredacted SSIDs, MAC addresses, IP addresses and machine serial numbers.
 
-**Kext Download Source**
-<!---To help us identify your issue, please tell us where did you download the kext and whether it's custom built--->
+See the capability matrix first: native AirDrop and WPA3-only are not implemented.
