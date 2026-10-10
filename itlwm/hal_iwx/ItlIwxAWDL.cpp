@@ -7,6 +7,7 @@
 #include <AWDL/AwdlRegulatory.h>
 #include <AWDL/AwdlRxClock.h>
 #include <AWDL/AwdlSyncAction.h>
+#include <AWDL/AwdlTxCompletion.h>
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -474,6 +475,7 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     auto &trace = awdlNativeTrace[index];
     bzero(&trace,sizeof(trace));
     trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
+    trace.packetLength = uint32_t(length);
     trace.freshHostUs = clock.host_end_us;
     awdlNativeTraceIndex = index; awdlNativeTraceCount = index + 1;
     __atomic_store_n(&awdlNativeFilterAbsolute, uint64_t(0), __ATOMIC_RELAXED);
@@ -484,14 +486,55 @@ IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, siz
     return result;
 }
 
-void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index) {
+void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index, uint32_t nextSequence) {
     if (!awdlNativeTxQualification || !awdlNativeRadioOwner ||
         awdlNativeTraceIndex >= awdlNativeTraceCount || awdlNativeTraceIndex >= nitems(awdlNativeTrace)) return;
     auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
     trace.qid = qid; trace.index = index;
+    trace.nextSequence = nextSequence&0xfffU;
     // Host clock immediately before the existing MMIO write, not an on-air
     // timestamp. Do not add another peripheral read/lock to the hot TX path.
     trace.doorbellHostUs = awdlNowUs();
+}
+
+uint64_t ItlIwx::awdlObserveNativeTxDma() {
+    const auto now = awdlNowUs();
+#ifdef AIRPORT_VTD
+    static_assert(offsetof(iwx_rx_packet,data)==8 && sizeof(iwx_tx_resp)==44,
+        "read-only completion probe transport layout");
+    static_assert(offsetof(iwx_tx_resp,wireless_media_time)==8 &&
+        offsetof(iwx_tx_resp,byte_cnt)==30 && offsetof(iwx_tx_resp,tx_queue)==36 &&
+        offsetof(iwx_tx_resp,status)==40, "TX response v6 fields");
+    if (!awdlNativeRadioOwner || !awdlNativeTxQualification || !awdl.tx.pending ||
+        awdlNativeTraceIndex>=awdlNativeTraceCount || awdlNativeTraceIndex>=nitems(awdlNativeTrace) ||
+        !getMainWorkLoop()->inGate() || !com.rxq.stat) return now;
+    auto &trace=awdlNativeTrace[awdlNativeTraceIndex];
+    if (!trace.doorbellHostUs || trace.dmaReplyHostUs) return now;
+    trace.dmaProbeSupported=true;
+    ++trace.dmaProbeSamples;
+    // The published close index transfers these buffers to the host. Normal
+    // RX cannot reclaim them concurrently because both paths use this gate.
+    // Only inspect completed DMA memory: no NIC access, MMIO, ring advancement,
+    // command completion, copying into live mbufs or interrupt acknowledgement.
+    OSSynchronizeIO();
+    const uint16_t hw=le16toh(*static_cast<volatile uint16_t *>(com.rxq.stat))&
+        (IWX_RX_MQ_RING_COUNT-1);
+    const uint32_t pending=(hw+IWX_RX_MQ_RING_COUNT-com.rxq.cur)&(IWX_RX_MQ_RING_COUNT-1);
+    if (pending>trace.dmaPendingMax) trace.dmaPendingMax=pending;
+    if (pending>16) ++trace.dmaScanTruncated;
+    for (uint32_t i=0;i<pending && i<16;++i) {
+        const auto index=(com.rxq.cur+i)&(IWX_RX_MQ_RING_COUNT-1);
+        auto map=com.rxq.data[index].map;
+        if (!map || !map->dma.arena || !map->dma.vaddr || map->dma.size<IWX_RBUF_SIZE) continue;
+        ItlAwdl::TxCompletionView reply={};
+        if (!ItlAwdl::findTxCompletion(static_cast<const uint8_t *>(map->dma.vaddr),IWX_RBUF_SIZE,
+                uint16_t(trace.qid),uint16_t(trace.nextSequence),uint16_t(trace.packetLength),&reply)) continue;
+        trace.dmaReplyHostUs=awdlNowUs();
+        trace.dmaStatus=reply.status; trace.dmaMediaUs=reply.mediaUs;
+        break;
+    }
+#endif
+    return now;
 }
 
 void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
@@ -511,6 +554,13 @@ void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
         put("host_error",t.hostError); put("firmware_status",t.firmwareStatus);
         put("firmware_media_us",t.mediaUs); put("bluetooth_kills",t.btKill);
         put("rts_failures",t.rtsFailures); put("frame_failures",t.frameFailures);
+        put("dma_probe_supported",t.dmaProbeSupported); put("dma_probe_samples",t.dmaProbeSamples);
+        put("dma_pending_max",t.dmaPendingMax); put("dma_scan_truncated",t.dmaScanTruncated);
+        put("dma_reply_seen",t.dmaReplyHostUs!=0);
+        if (t.dmaReplyHostUs>=t.doorbellHostUs && t.doorbellHostUs) {
+            put("doorbell_to_dma_reply_host_us",t.dmaReplyHostUs-t.doorbellHostUs);
+            put("dma_reply_status",t.dmaStatus); put("dma_reply_media_us",t.dmaMediaUs);
+        }
         const auto age = ItlAwdl::clockDelta(t.freshGp2,t.frameGp2);
         if (age>=0 && age<=2000) put("frame_age_at_fresh_read_us",uint64_t(age));
         if (t.doorbellHostUs>=t.freshHostUs && t.freshHostUs)

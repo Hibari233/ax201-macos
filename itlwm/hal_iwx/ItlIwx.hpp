@@ -166,8 +166,9 @@ private:
     // Not part of the radio diagnostic context: radio resets must not erase
     // ownership of a native object retained by the controller.
     bool awdlNativeInterfaceActive = false;
-    // Internal receive-only qualification lease. The native probe retains this
-    // object through cleanup; userspace cannot set or supply this identity.
+    // Internal qualification lease; only the explicit native-template trial
+    // permits TX. The probe retains this object through cleanup; userspace
+    // cannot set or supply this identity.
     OSObject *awdlNativeRadioOwner = nullptr;
     bool awdlNativeTxQualification = false;
     uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
@@ -183,10 +184,14 @@ private:
         uint64_t batchHostUs, filterAbsolute;
         uint32_t frameGp2, freshGp2, completeGp2, qid, index;
         uint32_t mediaUs, btKill, rtsFailures, frameFailures, firmwareStatus, hostError;
-        bool completed, clockValid;
+        uint64_t dmaReplyHostUs;
+        uint32_t nextSequence, packetLength, dmaProbeSamples, dmaPendingMax, dmaScanTruncated;
+        uint32_t dmaStatus, dmaMediaUs;
+        bool completed, clockValid, dmaProbeSupported;
     } awdlNativeTrace[4] = {};
     uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;
-    void awdlNativeTxDoorbell(uint32_t, uint32_t);
+    void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t);
+    uint64_t awdlObserveNativeTxDma();
     void awdlPublishNativeTxTiming(IORegistryEntry *);
     struct {
         bool ready = false;

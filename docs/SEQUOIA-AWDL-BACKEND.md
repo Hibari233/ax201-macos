@@ -838,3 +838,23 @@ separately. No interval is represented as an actual on-air TX timestamp.
 Records are published after radio stop, contain no payloads or peer identities,
 and are cleared at the next accepted native TX trial. No user-client ABI,
 native interface enablement, firmware settings or timing threshold changes.
+
+A follow-up read-only observer samples completed RX DMA buffers between the
+existing 20 ms GP2/TX scheduling steps. The TX qualification thread wakes at
+1 ms intervals for this observation only. It takes no NIC lock, performs no
+MMIO, changes no ring indices and does not consume, acknowledge or dispatch a
+response. Normal interrupt handling still owns completion accounting.
+
+The observer is gated, limited to the explicit native TX lease and at most
+sixteen already-closed RX buffers per sample, and uses a bounded parser for the
+existing Intel TX response v6 layout. Matching requires command/group, a
+single-frame response, the pending queue, its next scheduler sequence and the
+submitted byte count. Layout assertions bind the parser to the port's structs;
+offline fixtures cover truncation, alignment, identity mismatches, failure
+statuses, wrap and mutation. Only timing and status aggregates are exposed.
+
+An observed response can bound when its contents became visible to the host;
+it is not a measured RF timestamp. A missing match cannot prove no response
+exists, particularly if a scan was truncated or notification raced the sample.
+The unchanged completion deadline may still fail even with an earlier observed
+DMA response. This experiment does not enable operational synchronization.

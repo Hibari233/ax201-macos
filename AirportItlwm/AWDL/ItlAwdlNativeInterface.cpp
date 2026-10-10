@@ -653,6 +653,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         const ItlAwdlBeginRequest *request; ItlAwdlNativeRadioResponse *out;
         uint32_t phase; int generation; bool finished;
         ItlAwdlNativeSyncTxResponse *tx; ItlAwdl::LocalTimeline timeline;
+        uint64_t nextClockHostUs;
         bool timelineReady, sentWindow; uint16_t lastWindow;
     } call = {};
     call.parent = parent; call.radio = radio; call.request = request;
@@ -715,6 +716,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             }
             out->attempted = 1;
             auto result = r->awdlBegin(o, &begin);
+            if (c->tx) c->nextClockHostUs=r->awdlObserveNativeTxDma()+20000;
             if (result) { out->last_error = result; c->finished = true; }
             return kIOReturnSuccess;
         }
@@ -734,6 +736,11 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 out->last_error = kIOReturnAborted; c->finished = true; return kIOReturnSuccess;
             }
             out->radio_ready = 1;
+            if (c->tx) {
+                const auto now=r->awdlObserveNativeTxDma();
+                if (now<c->nextClockHostUs) return kIOReturnSuccess;
+                c->nextClockHostUs=now+20000;
+            }
             ItlAwdlClockResponse clock = {};
             auto result = r->awdlReadClock(&clock);
             if (result) { out->last_error = result; c->finished = true; return kIOReturnSuccess; }
@@ -823,8 +830,12 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
         call.phase = 1;
         // The independent radio timer also expires the lease. Sleeps happen
         // outside the gate, allowing RX, firmware completion and power teardown.
-        for (uint32_t elapsed = 0; !call.finished && elapsed < request->dwell_ms + 100; elapsed += 20) {
-            IOSleep(20);
+        // In TX qualification only, observe completed DMA buffers between the
+        // existing 20 ms clock/RF steps. Observation never wakes the NIC or
+        // consumes a response. The original TX completion limit is unchanged.
+        const uint32_t delayMs=tx ? 1 : 20;
+        for (uint32_t elapsed = 0; !call.finished && elapsed < request->dwell_ms + 100; elapsed += delayMs) {
+            IOSleep(delayMs);
             auto step = gate->runAction(action, &call);
             if (step) { out->last_error = step; break; }
         }

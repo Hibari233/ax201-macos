@@ -7267,7 +7267,7 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     /* Kick TX ring. */
     ring->cur = (ring->cur + 1) % getTxQueueSize();
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    if (awdlNativeTxQualification) awdlNativeTxDoorbell(ring->qid,idx);
+    if (awdlNativeTxQualification) awdlNativeTxDoorbell(ring->qid,idx,ring->cur);
 #endif
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     

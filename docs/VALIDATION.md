@@ -900,3 +900,43 @@ checks passed. Manager creation remained one and backend calls remained twelve.
 Native interface and queues stayed disabled and unpublished, with no native RX
 handoff, verified discovery or AirDrop transfer. The timeout will not be relaxed
 merely to turn this failure into a pass; the next step is timing attribution.
+
+## TX preparation versus notification latency — 2026-10-10
+
+Source `29dcee1130c6ee466dee19d7f029dd48c63a7edf` (revision 36):
+
+- Binary SHA-256: `801b90868f866aa4ca7dee31fa90cd71b79f20107915621f840d1b228c1dd314`
+- Loaded UUID: `44BDC266-C985-3465-B49D-A0FEFA396CF2`.
+- [Exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38055537031)
+  passed all three jobs; local UBSan and both 560-slot native ABI comparisons
+  passed. A revision 35 rollback was verified.
+
+The 384 initialization contracts, native configure/template and two passive RF
+regressions passed. The synchronization TX trial again stopped after its first
+successful firmware completion: **25,037 us** from frame GP2 to completion.
+No additional frames were submitted, and no pending or aborted TX remained.
+
+The new instrumentation recorded:
+
+| Interval/counter | Observation |
+| --- | ---: |
+| Frame age at final pre-submit GP2 read | 40 us |
+| Final GP2 read to TX doorbell, host clock | 27 us |
+| Doorbell to notification-batch interrupt filter | 24,867 us |
+| Batch filter to gated RX handler | 56 us |
+| RX batch entry to completion measurement | 48 us |
+| Final pre-submit read to completion, GP2 / host | 24,997 / 24,998 us |
+| Firmware-reported wireless media duration | 168 us |
+| Firmware RTS/frame retries and Bluetooth kills | 0 / 0 / 0 |
+
+The two clock domains agree. Preparation and post-interrupt host processing do
+not account for most of the measured delay. This does **not** distinguish late
+RF transmission, late firmware response generation, DMA publication or late
+interrupt notification. The reported media duration is not an absolute on-air
+timestamp. No peer reception was observed.
+
+Wi-Fi was restored before the harness reported the qualification failure;
+router pings passed 36/36 and retained health assertions passed. The same native
+manager remained disabled and unpublished. The next diagnostic inspects only
+completed DMA buffers between clock polls to look for an earlier matching
+response, without consuming it or changing the 5 ms completion limit.
