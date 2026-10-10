@@ -8,6 +8,7 @@
 #include <AWDL/AwdlSyncAction.h>
 #include <AWDL/AwdlNativeChannelSequence.h>
 #include <AWDL/AwdlLocalTimeline.h>
+#include <AWDL/AwdlNativeSyncParameters.h>
 
 class AirportItlwm;
 class ItlIwx;
@@ -42,6 +43,8 @@ public:
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeConfigureResponse *);
     static IOReturn probeTemplate(AirportItlwm *, ItlIwx *,
         const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTemplateResponse *);
+    static IOReturn probeTiming(AirportItlwm *, ItlIwx *,
+        const ItlAwdlNativeConfigureRequest *, ItlAwdlNativeTimingResponse *);
     static IOReturn probeRadio(AirportItlwm *, ItlIwx *,
         const ItlAwdlBeginRequest *, ItlAwdlNativeRadioResponse *, ItlAwdlNativeSyncTxResponse * = nullptr);
     void free() override;
@@ -85,6 +88,8 @@ private:
     ItlAwdlNativeConfigureResponse *backendTrace;
     ItlAwdlNativeConfigureResponse configurationResult;
     ItlAwdlNativeTemplateResponse templateResult;
+    ItlAwdlNativeTimingResponse timingResult;
+    ItlAwdl::NativeSyncParameters syncParameters;
     ItlAwdl::ActionTemplate syncTemplate;
     ItlAwdl::NativeBssidConfiguration networkConfiguration;
     uint16_t electionId;

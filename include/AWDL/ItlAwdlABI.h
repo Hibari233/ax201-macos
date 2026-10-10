@@ -13,7 +13,7 @@ enum {
     ITL_AWDL_MAX_EVENTS = 32,
     ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -195,6 +195,16 @@ struct ItlAwdlNativeTemplateResponse {
     uint32_t template_length, template_revision, tlv_count, encoded_length;
     uint32_t tlv_kinds[8];
 };
+// One native get/set/get timing transaction after configure and before the
+// template. Input is ConfigureRequest. Only the audited default profile is
+// staged; repeat run returns its saved result. No RF or sync enable occurs.
+// Parameter arrays: version, AW length, AW period, extension, frame period,
+// opaque final word. Native getters hide some backend errors: inspect trace.
+struct ItlAwdlNativeTimingResponse {
+    ItlAwdlNativeConfigureResponse call;
+    uint32_t get_before_result, set_result, get_after_result, ready;
+    uint32_t before[6], after[6];
+};
 // Synchronous, receive-only native radio qualification. Input is BeginRequest:
 // channel must be zero (use staged master channel), dwell 1000..5000 ms, and
 // peer is the user's own test device. STA must already be off. The one retained
@@ -267,6 +277,8 @@ static_assert(ItlAwdlNativeRadio == 28, "append-only native radio ABI");
 static_assert(sizeof(ItlAwdlNativeRadioResponse) == 160, "native radio response ABI");
 static_assert(ItlAwdlNativeSyncTx == 29, "append-only native sync TX ABI");
 static_assert(sizeof(ItlAwdlNativeSyncTxResponse) == 224, "native sync TX response ABI");
+static_assert(ItlAwdlNativeTiming == 30, "append-only native timing ABI");
+static_assert(sizeof(ItlAwdlNativeTimingResponse) == 376, "native timing response ABI");
 static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
 static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
 static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");

@@ -257,6 +257,52 @@ static int configureRun(io_connect_t client, uint32_t operation) {
     return valid && (operation != ItlAwdlConfigureRun || (out.present && out.attempted)) ? 0 : 1;
 }
 
+static kern_return_t timingInvoke(io_connect_t client, const ItlAwdlNativeConfigureRequest &r,
+    ItlAwdlNativeTimingResponse &out, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
+    size_t size = sizeof(ItlAwdlNativeTimingResponse)) {
+    memset(&out, 0, sizeof(out));
+    auto result = IOConnectCallStructMethod(client, ItlAwdlNativeTiming, &r, in, &out, &size);
+    if (!result && (size != sizeof(out) || out.call.version != ITL_AWDL_ABI_VERSION ||
+        out.call.trace_count > ITL_AWDL_CONFIGURE_TRACE_COUNT || out.ready > 1)) return kIOReturnBadArgument;
+    return result;
+}
+
+static int timingInvalidRequests(io_connect_t client) {
+    unsigned passed = 0, failed = 0;
+    auto check = [&](const char *name, kern_return_t got) {
+        if (got == kIOReturnBadArgument) ++passed;
+        else { ++failed; fprintf(stderr, "%s: 0x%x\n", name, got); }
+    };
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, ItlAwdlConfigureInspect, {0, 0}};
+    ItlAwdlNativeTimingResponse out = {};
+    check("short input", timingInvoke(client, r, out, sizeof(r)-1));
+    check("long input", IOConnectCallStructMethod(client, ItlAwdlNativeTiming,
+        &out, sizeof(out), nullptr, nullptr));
+    check("short output", timingInvoke(client, r, out, sizeof(r), sizeof(out)-1));
+    r.version = 0; check("version", timingInvoke(client, r, out)); r.version = 1;
+    r.operation = 2; check("operation", timingInvoke(client, r, out)); r.operation = 0;
+    r.reserved[0] = 1; check("reserved0", timingInvoke(client, r, out)); r.reserved[0] = 0;
+    r.reserved[1] = 1; check("reserved1", timingInvoke(client, r, out));
+    printf("{\"invalid_timing_checks_passed\":%u,\"failed\":%u}\n", passed, failed);
+    return failed ? 1 : 0;
+}
+
+static int timingRun(io_connect_t client, uint32_t operation) {
+    ItlAwdlNativeConfigureRequest r = {ITL_AWDL_ABI_VERSION, operation, {0, 0}};
+    ItlAwdlNativeTimingResponse out = {};
+    auto result = timingInvoke(client, r, out);
+    if (result) { fprintf(stderr, "Native timing request: 0x%x\n", result); return 1; }
+    printf("{\"call\":");
+    const bool valid = printNativeCall(out.call);
+    printf(",\"get_before_result\":%u,\"set_result\":%u,\"get_after_result\":%u,\"ready\":%u,\"before\":[",
+        out.get_before_result, out.set_result, out.get_after_result, out.ready);
+    for (unsigned i = 0; i < 6; ++i) printf("%s%u", i ? "," : "", out.before[i]);
+    printf("],\"after\":[");
+    for (unsigned i = 0; i < 6; ++i) printf("%s%u", i ? "," : "", out.after[i]);
+    printf("],\"rf_transmitted\":false,\"native_airdrop\":false}\n");
+    return valid && (operation != ItlAwdlConfigureRun || (out.call.present && out.call.attempted)) ? 0 : 1;
+}
+
 static kern_return_t templateInvoke(io_connect_t client, const ItlAwdlNativeConfigureRequest &r,
     ItlAwdlNativeTemplateResponse &out, size_t in = sizeof(ItlAwdlNativeConfigureRequest),
     size_t size = sizeof(ItlAwdlNativeTemplateResponse)) {
@@ -421,6 +467,8 @@ int main(int argc, char **argv) {
     const bool session = argc == 3 && !strcmp(argv[1], "session");
     const bool configureSelftest = argc == 2 && !strcmp(argv[1], "configure-selftest");
     const bool configure = argc == 3 && !strcmp(argv[1], "configure");
+    const bool timingSelftest = argc == 2 && !strcmp(argv[1], "timing-selftest");
+    const bool timingRequest = argc == 3 && !strcmp(argv[1], "timing");
     const bool templateSelftest = argc == 2 && !strcmp(argv[1], "template-selftest");
     const bool templateRequest = argc == 3 && !strcmp(argv[1], "template");
     const bool radioSelftest = argc == 2 && !strcmp(argv[1], "radio-selftest");
@@ -429,7 +477,7 @@ int main(int argc, char **argv) {
     const bool syncTxRequest = argc == 4 && !strcmp(argv[1], "sync-tx");
     ItlAwdlBeginRequest radioInput = {ITL_AWDL_ABI_VERSION,0,0,0,{},{}};
     uint32_t configureOperation = ItlAwdlConfigureInspect;
-    if (configure || templateRequest) {
+    if (configure || templateRequest || timingRequest) {
         if (!strcmp(argv[2], "run")) configureOperation = ItlAwdlConfigureRun;
         else if (strcmp(argv[2], "status")) configureOperation = 2;
     }
@@ -441,10 +489,10 @@ int main(int argc, char **argv) {
     }
     ItlAwdlNativeInitRequest request = {ITL_AWDL_ABI_VERSION, 0, 0, 0};
     if ((!selftest && !run && !denied && !startSelftest && !start && !startDeniedTest && !session && !sessionSelftest &&
-         !configure && !configureSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !syncTxSelftest && !syncTxRequest) ||
+         !configure && !configureSelftest && !timingRequest && !timingSelftest && !templateRequest && !templateSelftest && !radioSelftest && !radioRequest && !syncTxSelftest && !syncTxRequest) ||
         ((radioRequest || syncTxRequest) && (!peerAddress(argv[2], radioInput.peer) || !number(argv[3], &radioInput.dwell_ms) ||
                          radioInput.dwell_ms < 1000 || radioInput.dwell_ms > 5000)) ||
-        ((configure || templateRequest) && configureOperation > ItlAwdlConfigureRun) ||
+        ((configure || templateRequest || timingRequest) && configureOperation > ItlAwdlConfigureRun) ||
         (session && operation > ItlAwdlNativeRetire) ||
         (run && (!number(argv[2], &request.iterations) || request.iterations < 1 || request.iterations > 8 ||
                  !number(argv[3], &request.stop_after) || request.stop_after > 2)) ||
@@ -454,6 +502,7 @@ int main(int argc, char **argv) {
                         "       awdl_native_init start-selftest | start-denied | start ITERATIONS(1..4) FAIL_PEER(0..1)\n"
                         "       awdl_native_init session-selftest | session status|create|retire\n"
                         "       awdl_native_init configure-selftest | configure status|run\n"
+                        "       awdl_native_init timing-selftest | timing status|run\n"
                         "       awdl_native_init template-selftest | template status|run\n"
                         "       awdl_native_init radio-selftest | radio OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
                         "       awdl_native_init sync-tx-selftest | sync-tx OWNED_PEER_MAC DWELL_MS(1000..5000)\n"
@@ -480,6 +529,8 @@ int main(int argc, char **argv) {
     if (sessionSelftest) { int code = sessionInvalidRequests(client); IOServiceClose(client); return code; }
     if (configureSelftest) { int code = configureInvalidRequests(client); IOServiceClose(client); return code; }
     if (configure) { int code = configureRun(client, configureOperation); IOServiceClose(client); return code; }
+    if (timingSelftest) { int code = timingInvalidRequests(client); IOServiceClose(client); return code; }
+    if (timingRequest) { int code = timingRun(client, configureOperation); IOServiceClose(client); return code; }
     if (templateSelftest) { int code = templateInvalidRequests(client); IOServiceClose(client); return code; }
     if (templateRequest) { int code = templateRun(client, configureOperation); IOServiceClose(client); return code; }
     if (syncTxSelftest) { int code = radioInvalidRequests(client,true); IOServiceClose(client); return code; }

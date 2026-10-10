@@ -17,6 +17,10 @@ extern "C" IOReturn nativeAwdlConfigure(OSObject *)
     __asm__("__ZN22IO80211AWDLPeerManager9configureEv");
 extern "C" IOReturn nativeAwdlUpdateTemplate(OSObject *, bool)
     __asm__("__ZN22IO80211AWDLPeerManager23updateSyncFrameTemplateEb");
+extern "C" IOReturn nativeAwdlGetSyncParams(OSObject *, apple80211_awdl_sync_params *)
+    __asm__("__ZN22IO80211AWDLPeerManager17getAwdlSyncParamsEP27apple80211_awdl_sync_params");
+extern "C" IOReturn nativeAwdlSetSyncParams(OSObject *, apple80211_awdl_sync_params *)
+    __asm__("__ZN22IO80211AWDLPeerManager17setAwdlSyncParamsEP27apple80211_awdl_sync_params");
 
 namespace {
 // Native log/service detach may defer the final release until the work queue
@@ -62,6 +66,45 @@ IOReturn ItlAwdlNativeInterface::backendResult(BackendIndex index, IOReturn resu
         else ++trace.trace_dropped;
     }
     return result;
+}
+
+IOReturn ItlAwdlNativeInterface::getAWDL_SYNC_PARAMS(apple80211_awdl_sync_params *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_getAWDL_SYNC_PARAMS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    // The native manager falls back to its defaults ONLY for Unsupported.
+    // Its wrapper otherwise returns success even for a backend error. Keep
+    // unconfigured state distinguishable and leave the caller's buffer intact.
+    if (!syncParameters.ready()) return finish(kIOReturnUnsupported);
+    apple80211_awdl_sync_params result = {};
+    result.version = 1;
+    result.availability_window_length = syncParameters.lengthTu();
+    result.availability_window_period = syncParameters.periodTu();
+    result.extension_length = syncParameters.extensionTu();
+    result.synchronization_frame_period = syncParameters.framePeriodTu();
+    *data = result;
+    return finish(kIOReturnSuccess);
+}
+
+IOReturn ItlAwdlNativeInterface::setAWDL_SYNC_PARAMS(apple80211_awdl_sync_params *data) {
+    const auto finish = [&](IOReturn r) { return backendResult(Backend_setAWDL_SYNC_PARAMS, r); };
+    if (!data) return finish(kIOReturnBadArgument);
+    if (strcmp(osversion, "24H32")) return finish(kIOReturnUnsupported);
+    auto loop = controller ? controller->getWorkLoop() : nullptr;
+    if (!loop || !loop->inGate() || resourcesDisposed || isInactive()) return finish(kIOReturnNotReady);
+    if (isInterfaceEnabled()) return finish(kIOReturnBusy);
+    static_assert(sizeof(*data) == 24, "24H32 sync parameter request");
+    static_assert(offsetof(apple80211_awdl_sync_params, unknown_14) == 20, "24H32 sync parameter tail");
+    const auto result = syncParameters.replace(data->version, data->availability_window_length,
+        data->availability_window_period, data->extension_length,
+        data->synchronization_frame_period, data->unknown_14);
+    if (result == ItlAwdl::NativeSyncResult::Invalid) return finish(kIOReturnBadArgument);
+    if (result == ItlAwdl::NativeSyncResult::Unsupported) return finish(kIOReturnUnsupported);
+    // Disabled staging, consumed by the encoder and qualification timeline.
+    // An operational enable still needs a qualified firmware transaction.
+    return finish(kIOReturnSuccess);
 }
 
 IOReturn ItlAwdlNativeInterface::getAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *data) {
@@ -484,6 +527,102 @@ IOReturn ItlAwdlNativeInterface::probeConfiguration(AirportItlwm *parent, ItlIwx
     }, &call);
 }
 
+IOReturn ItlAwdlNativeInterface::probeTiming(AirportItlwm *parent, ItlIwx *radio,
+    const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeTimingResponse *out) {
+    if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
+        request->operation > ItlAwdlConfigureRun || request->reserved[0] || request->reserved[1])
+        return kIOReturnBadArgument;
+    if (strcmp(osversion, "24H32")) return kIOReturnUnsupported;
+    auto gate = radio->getMainCommandGate();
+    if (!gate || !gate->getWorkLoop()) return kIOReturnNotReady;
+    NativeProbeLease lease;
+    if (!lease.owned) return kIOReturnBusy;
+    bzero(out, sizeof(*out));
+    out->call.version = ITL_AWDL_ABI_VERSION;
+    struct Call { AirportItlwm *parent; ItlIwx *radio; IOWorkLoop *loop;
+        const ItlAwdlNativeConfigureRequest *request; ItlAwdlNativeTimingResponse *out;
+    } call = {parent, radio, gate->getWorkLoop(), request, out};
+    return gate->runAction([](OSObject *, void *argument, void *, void *, void *) -> IOReturn {
+        auto c = static_cast<Call *>(argument);
+        if (c->parent->isInactive()) return kIOReturnNotReady;
+        ItlAwdlStatusResponse status = {};
+        auto result = c->radio->awdlCommand(c->parent, ItlAwdlStatus, nullptr, &status);
+        if (result) return result;
+        if (status.device_id != 0x7af0) return kIOReturnUnsupported;
+        if (status.session != ItlAwdlIdle) return kIOReturnBusy;
+        auto object = c->parent->nativeAwdlInterface;
+        if (!object) return c->request->operation == ItlAwdlConfigureInspect ?
+            kIOReturnSuccess : kIOReturnNotReady;
+        if (c->parent->getAwdlInterface() != object || object->isInactive() ||
+            object->resourcesDisposed || !object->startAttempted || object->getWorkLoop() != c->loop)
+            return kIOReturnNotReady;
+        auto &saved = object->timingResult;
+        auto &trace = saved.call;
+        if (c->request->operation == ItlAwdlConfigureRun && !trace.attempted) {
+            if (object->bsdPublishRequested || object->getBSDInterface() ||
+                object->transportRegistered || object->isInterfaceEnabled()) return kIOReturnBusy;
+            if (!object->configurationResult.attempted || object->configurationResult.native_result ||
+                !object->networkConfiguration.ready() || object->syncParameters.ready() ||
+                object->syncTemplate.length() || object->templateResult.call.attempted) return kIOReturnNotReady;
+            auto state = object->nativeStartState();
+            auto peerClass = nativePeerClass();
+            auto queue = c->parent->getWorkQueue();
+            if (!state || !state->peerManager || !peerClass ||
+                !state->peerManager->metaCast(peerClass) || !queue || queue->onThread())
+                return kIOReturnNotReady;
+            trace.attempted = 1;
+            trace.backend_before = object->backendCalls;
+            saved.get_before_result = saved.set_result = saved.get_after_result = kIOReturnNotReady;
+            object->backendTrace = &trace;
+            const auto observed = [&](uint32_t count, BackendIndex index, IOReturn expected) {
+                return trace.trace_count == count && !trace.trace_dropped &&
+                    trace.trace[count - 1].vptr_offset == 0xfa0U + 8U * index &&
+                    trace.trace[count - 1].result == static_cast<uint32_t>(expected);
+            };
+            apple80211_awdl_sync_params before, after;
+            memset(&before, 0xa5, sizeof(before));
+            memset(&after, 0xa5, sizeof(after));
+            saved.get_before_result = nativeAwdlGetSyncParams(state->peerManager, &before);
+            memcpy(saved.before, &before, sizeof(before));
+            ItlAwdl::NativeSyncParameters qualified;
+            bool valid = !saved.get_before_result && observed(1, Backend_getAWDL_SYNC_PARAMS, kIOReturnUnsupported) &&
+                qualified.replace(before.version, before.availability_window_length,
+                    before.availability_window_period, before.extension_length,
+                    before.synchronization_frame_period, before.unknown_14) == ItlAwdl::NativeSyncResult::Stored;
+            if (valid) {
+                auto input = before;
+                saved.set_result = nativeAwdlSetSyncParams(state->peerManager, &input);
+                valid = !saved.set_result && observed(2, Backend_setAWDL_SYNC_PARAMS, kIOReturnSuccess) &&
+                    object->syncParameters.ready();
+            }
+            if (valid) {
+                saved.get_after_result = nativeAwdlGetSyncParams(state->peerManager, &after);
+                memcpy(saved.after, &after, sizeof(after));
+                valid = !saved.get_after_result && observed(3, Backend_getAWDL_SYNC_PARAMS, kIOReturnSuccess) &&
+                    after.version == 1 && !after.unknown_14 &&
+                    before.availability_window_length == after.availability_window_length &&
+                    before.availability_window_period == after.availability_window_period &&
+                    before.extension_length == after.extension_length &&
+                    before.synchronization_frame_period == after.synchronization_frame_period;
+            }
+            object->backendTrace = nullptr;
+            trace.native_result = valid ? kIOReturnSuccess : kIOReturnError;
+            trace.backend_after = object->backendCalls;
+            saved.ready = object->syncParameters.ready();
+        }
+        memcpy(c->out, &saved, sizeof(*c->out));
+        auto &snapshot = c->out->call;
+        snapshot.version = ITL_AWDL_ABI_VERSION;
+        snapshot.present = 1;
+        snapshot.registry_id = object->getRegistryEntryID();
+        snapshot.interface_enabled = object->isInterfaceEnabled();
+        snapshot.tx_enabled = object->transportTx && object->transportTx->isEnabled();
+        snapshot.rx_enabled = object->transportRx && object->transportRx->isEnabled();
+        snapshot.bsd_present = object->getBSDInterface() != nullptr;
+        return kIOReturnSuccess;
+    }, &call);
+}
+
 IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *radio,
     const ItlAwdlNativeConfigureRequest *request, ItlAwdlNativeTemplateResponse *out) {
     if (!parent || !radio || !request || !out || request->version != ITL_AWDL_ABI_VERSION ||
@@ -523,7 +662,9 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
                 !object->electionMetricValid || !object->minimumRateValid ||
                 !object->masterChannelValid || !object->stagedSyncRoleValid ||
                 !object->presenceModeValid || !object->extensionCountsValid ||
-                !object->channelSequence.ready() || object->syncTemplate.length()) return kIOReturnNotReady;
+                !object->channelSequence.ready() || !object->syncParameters.ready() ||
+                !object->timingResult.call.attempted || object->timingResult.call.native_result ||
+                object->syncTemplate.length()) return kIOReturnNotReady;
             auto state = object->nativeStartState();
             auto peerClass = nativePeerClass();
             auto queue = c->parent->getWorkQueue();
@@ -550,8 +691,8 @@ IOReturn ItlAwdlNativeInterface::probeTemplate(AirportItlwm *parent, ItlIwx *rad
                 pos += 3 + ItlAwdl::le16(p + 1);
             }
             if (!trace.native_result && saved.template_length) {
-                // CPU-only integration specimen. The synthetic clock and
-                // period below are never passed to a radio or reported as an
+                // CPU-only integration specimen. The synthetic clock below
+                // is never passed to a radio or reported as an
                 // observed synchronization boundary. No frame bytes leave.
                 uint8_t frame[ItlAwdl::SyncActionMaxLength];
                 saved.encoded_length = uint32_t(object->encodeQualificationFrame(1000000, frame, sizeof(frame)));
@@ -575,7 +716,7 @@ size_t ItlAwdlNativeInterface::copySyncAction(const ItlAwdl::SyncActionContext &
     auto loop = controller ? controller->getWorkLoop() : nullptr;
     if (strcmp(osversion, "24H32") || !loop || !loop->inGate() ||
         resourcesDisposed || isInactive() || !syncTemplate.length() ||
-        !electionIdValid || !electionMetricValid || !minimumRateValid ||
+        !electionIdValid || !electionMetricValid || !minimumRateValid || !syncParameters.matches(parameters) ||
         !masterChannelValid || parameters.masterChannel != masterChannel ||
         !stagedSyncRoleValid || stagedSyncRole.operation_mode != 1 ||
         !ItlAwdl::equalMac(parameters.master, stagedSyncRole.master) ||
@@ -604,10 +745,9 @@ size_t ItlAwdlNativeInterface::encodeQualificationFrame(uint32_t gp2, uint8_t *f
     context.sequence = sequence;
     ItlAwdl::SyncActionParameters parameters = {};
     parameters.masterChannel = parameters.nextChannel = uint8_t(masterChannel);
-    parameters.awPeriodTu = parameters.extensionTu = parameters.commonTu = 16;
-    parameters.actionPeriodTu = 110;
+    if (!syncParameters.apply(parameters)) return 0;
     parameters.presence = uint8_t(presenceMode);
-    parameters.downCounterTu = uint16_t(16 * parameters.presence);
+    parameters.downCounterTu = uint16_t(parameters.awPeriodTu * parameters.presence);
     parameters.minExtension = extensionCounts[0];
     parameters.maxMulticastExtension = extensionCounts[1];
     parameters.maxUnicastExtension = extensionCounts[2];
@@ -677,7 +817,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
                 o->getBSDInterface() || o->transportRegistered || o->isInterfaceEnabled()) return kIOReturnBusy;
             if (!o->configurationResult.attempted || o->configurationResult.native_result ||
                 !o->templateResult.call.attempted || o->templateResult.call.native_result ||
-                !o->templateResult.encoded_length || !o->masterChannelValid ||
+                !o->templateResult.encoded_length || !o->syncParameters.ready() || !o->masterChannelValid ||
                 (o->masterChannel != 6 && o->masterChannel != 44 && o->masterChannel != 149))
                 return kIOReturnNotReady;
             if (c->tx && (!o->minimumRateValid || !o->stagedSyncRoleValid ||
@@ -749,7 +889,7 @@ IOReturn ItlAwdlNativeInterface::probeRadio(AirportItlwm *parent, ItlIwx *radio,
             if ((clock.flags & 3) == 3) {
                 ++out->clock_valid;
                 if (!c->timelineReady)
-                    c->timelineReady = c->timeline.start(clock.gp2_us,16,uint8_t(o->presenceMode));
+                    c->timelineReady = c->timeline.start(clock.gp2_us,o->syncParameters.periodTu(),uint8_t(o->presenceMode));
                 ItlAwdl::LocalSyncBoundary boundary = {};
                 if (!c->timelineReady || !c->timeline.sample(clock.gp2_us,&boundary)) {
                     out->last_error = kIOReturnError; c->finished = true; return kIOReturnSuccess;
@@ -1324,6 +1464,7 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     bzero(extensionCounts, sizeof(extensionCounts));
     extensionCountsValid = false;
     channelSequence = {};
+    syncParameters = {};
     virtualInitAttempted = false;
     resourcesDisposed = false;
     bpfDisposed = startAllowed = startAttempted = failPeerCreation = false;
@@ -1331,6 +1472,7 @@ bool ItlAwdlNativeInterface::initializeForProbe(IO80211Controller *parent,
     backendTrace = nullptr;
     bzero(&configurationResult, sizeof(configurationResult));
     bzero(&templateResult, sizeof(templateResult));
+    bzero(&timingResult, sizeof(timingResult));
     transportPool = nullptr;
     transportTx = nullptr;
     transportRx = nullptr;
@@ -1626,6 +1768,38 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     ++out->methods_checked;
     if (object->getAWDL_SYNC_ENABLED(&enabled) || enabled.version != 1 || enabled.unk1 || enabled.enabled)
         ++out->method_failures;
+    ++out->methods_checked;
+    if (object->getAWDL_SYNC_PARAMS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    apple80211_awdl_sync_params timing;
+    memset(&timing, 0xa5, sizeof(timing));
+    const auto untouchedTiming = timing;
+    ++out->methods_checked;
+    if (object->getAWDL_SYNC_PARAMS(&timing) != kIOReturnUnsupported ||
+        memcmp(&timing, &untouchedTiming, sizeof(timing))) ++out->method_failures;
+    ++out->methods_checked;
+    if (object->setAWDL_SYNC_PARAMS(nullptr) != kIOReturnBadArgument) ++out->method_failures;
+    ++out->methods_checked;
+    const apple80211_awdl_sync_params savedTiming = {1, 16, 16, 16, 110, 0};
+    timing = savedTiming; timing.version = 0;
+    bool timingFailed = object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnSuccess || timing.version != 0;
+    timing = untouchedTiming;
+    timingFailed |= object->getAWDL_SYNC_PARAMS(&timing) != kIOReturnSuccess ||
+        memcmp(&timing, &savedTiming, sizeof(timing));
+    timing = savedTiming; timing.version = 2;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnBadArgument;
+    timing = savedTiming; timing.availability_window_period = 0;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnBadArgument;
+    timing = savedTiming; timing.availability_window_length = 32;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnUnsupported;
+    timing = savedTiming; timing.extension_length = 0x10000;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnBadArgument;
+    timing = savedTiming; timing.synchronization_frame_period = 111;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnUnsupported;
+    timing = savedTiming; timing.unknown_14 = 1;
+    timingFailed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnUnsupported;
+    timingFailed |= object->getAWDL_SYNC_PARAMS(&timing) != kIOReturnSuccess ||
+        memcmp(&timing, &savedTiming, sizeof(timing));
+    if (timingFailed) ++out->method_failures;
     ++out->methods_checked;
     if (object->setAWDL_BSSID(nullptr) != kIOReturnBadArgument) ++out->method_failures;
     apple80211_awdl_bssid bssid = {0, {0, 0x25, 0, 0xff, 0x94, 0x73},
@@ -1945,6 +2119,19 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     frame[0] = 0x5a;
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     context.clockValid = true;
+    // Callers cannot substitute timings independent of the native snapshot.
+    for (unsigned field = 0; field < 4; ++field) {
+        auto mismatch = parameters;
+        if (field == 0) ++mismatch.awPeriodTu;
+        if (field == 1) ++mismatch.commonTu;
+        if (field == 2) ++mismatch.extensionTu;
+        if (field == 3) ++mismatch.actionPeriodTu;
+        failed |= concrete->copySyncAction(context, mismatch, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    }
+    concrete->syncParameters.clear();
+    failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
+    timing = savedTiming;
+    failed |= object->setAWDL_SYNC_PARAMS(&timing) != kIOReturnSuccess;
     parameters.masterChannel = 149; // A caller cannot override the staged channel.
     failed |= concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     parameters.masterChannel = 6;
@@ -1971,6 +2158,7 @@ void ItlAwdlNativeInterface::checkBackendContract(ItlAwdlNativeInterface *concre
     failed |= object->setAWDL_SYNC_STATE(&role) != kIOReturnSuccess ||
         concrete->copySyncAction(context, parameters, frame, sizeof(frame)) != 0 || frame[0] != 0x5a;
     concrete->syncTemplate.clear();
+    concrete->syncParameters.clear();
     concrete->networkConfiguration.clear();
     concrete->electionId = 0;
     concrete->electionIdValid = false;

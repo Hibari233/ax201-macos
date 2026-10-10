@@ -56,9 +56,9 @@ Stop-after phases exercise the wrapper's early exits; they do not simulate an
 allocation failure inside Apple's code. Successful results require zero live
 objects after release, no remaining controller open, and no method failures.
 The complete phase checks virtual dispatch through all 63 native backend
-methods, plus `setMacAddress` and the self-address getter. The 43 unimplemented
+methods, plus `setMacAddress` and the self-address getter. The 41 unimplemented
 methods receive null and non-null opaque pointers and must not inspect request
-bytes. Twenty implemented methods instead receive fully sized audited structures:
+bytes. Twenty-two implemented methods instead receive fully sized audited structures:
 the sync-enabled getter reports disabled, the template setter stages an owned
 copy, the BSSID setter owns the default pair, and election-ID set/get normalize
 the native 16-bit value. Election-metric set/get retain the resolved 32-bit word,
@@ -66,7 +66,8 @@ and minimum-rate set/get retain a supported legacy OFDM rate. Master-channel set
 active map; election-RSSI set/get normalize four signed bytes. The sync-state
 setter owns a disabled role descriptor; presence and extension getters/setters
 retain the associated timing parameters. Channel-sequence set/get own and
-validate the qualified basic plan. Invalid updates preserve staged state. Full initialization must open
+validate the qualified basic plan. Sync-parameter set/get own the audited default
+profile and retain the native fallback until staged. Invalid updates preserve staged state. Full initialization must open
 the controller successfully. These checks never start synchronization or RF.
 
 The legacy declaration of `getSelfMacAddr()` incorrectly returned a pointer.
@@ -241,9 +242,9 @@ sudo build/tools/awdl_native_init sync-tx OWNED_PEER_MAC 3000
 A local timeline starts from a coherent GP2 sample. It advances AW counters and
 channel-plan slots, including counter/clock wrap. Its TU-aligned target timestamp
 and separate fractional-TU PHY offset reconstruct the exact EAW boundary; it
-does not round away the remaining fraction. The qualification uses 16-TU AWs
-and the staged presence/plan. These are explicit test-timeline parameters, not
-proof that the unimplemented native synchronization-parameter backend works.
+does not round away the remaining fraction. The qualification takes its AW period from the owned native sync parameters,
+currently restricted to the audited 16-TU default, and uses the staged
+presence/plan. This remains a test timeline, not enabled native synchronization.
 
 At most four broadcast PSFs are built from the owned native template. Only one
 can be pending, at most one is submitted per selected-channel EAW, and at least
@@ -760,6 +761,8 @@ enabled interface. It neither enables synchronization nor calls a TX routine.
 sudo build/tools/awdl_native_init template-selftest
 sudo build/tools/awdl_native_init template status
 # After the retained session's successful configure run:
+sudo build/tools/awdl_native_init timing-selftest
+sudo build/tools/awdl_native_init timing run
 sudo build/tools/awdl_native_init template run
 ```
 
@@ -770,7 +773,7 @@ failure, without another native invocation or peer creation. The response
 contains length, revision, TLV count and kinds, never raw template bytes or
 addresses. A CPU-only integration specimen combines this actual template with
 the staged plan, role and timing counts, then decodes it to check consistency.
-Its clock and period are synthetic; `encoded_length` proves neither hardware
+Its clock is synthetic; `encoded_length` proves neither hardware
 timing nor RF transmission. Firmware enable, native RX and AirDrop remain
 unqualified by this diagnostic. It is not an arbitrary template-input API.
 
@@ -888,3 +891,41 @@ This provides a separate controlled test of firmware buffering after the
 listener MAC parameter correction alone failed timing qualification. It does
 not shorten or fabricate the measured TX interval. Native enablement, the
 four-frame bound and the 5 ms completion guard are unchanged.
+
+### Disabled native synchronization parameters
+
+The exact 24H32 parameter initializer supplies AW length/period/extension of
+16 TU and synchronization frame period of 110 TU. Its interface-state request
+clears the full 24-byte struct before filling those four fields, leaving the
+opaque final word zero. This confirms the earlier test constants; it does not
+explain or resolve the observed firmware completion delay.
+
+The getter and setter now own that audited profile while the interface is
+disabled. Unqualified profiles, nonzero opaque tails, invalid versions and
+out-of-range fields are rejected without replacing prior state. Before staging,
+the getter returns `Unsupported` without touching its buffer, preserving the
+native peer manager's software fallback. After staging it returns the complete
+canonical request, with version 1 and no uninitialized padding. The encoder
+rejects timings that differ from this snapshot; both frame generation and the
+local qualification timeline consume the owned values.
+
+Root-only selector 30 / capability bit 524288 (`timing status|run`,
+`timing-selftest`) qualifies the
+native get/set/get path **after configure and before template generation**.
+It retains the same manager, requires an unpublished disabled interface with
+no transport, and runs under the controller gate. Its saved response includes
+all three native return values, backend trace results and before/after numeric
+parameters. Repeated run never invokes the native manager again.
+
+This explicit backend trace matters: the native getter returns zero even for
+some backend errors. The diagnostic requires one initial `Unsupported` getter
+with the verified fallback, then a successful setter and successful getter with
+matching timings. A zero wrapper return alone cannot pass. No radio, interface
+or queue is enabled, and this selector accepts no arbitrary timing profile.
+
+Offline checks cover transactional rejection, preservation, wire positions and
+clock-wrap timing; in-kernel initialization contracts also check fully sized
+requests and encoder disagreement. Actual native round-trip and passive radio
+qualification must be recorded separately. The failed 5 ms TX timing guard is
+unchanged, and no repeated TX trial is justified solely by staging the same
+default values.
