@@ -182,6 +182,21 @@ queue/BSD registration, link enable or packet transport from this path.
 
 ## Request extents
 
+The queue-array overload of `IOSkywalkEthernetInterface::registerEthernetInterface`
+at `0xffffff8002988078` returns a full `IOReturn`, preserving the copy/registration
+status in the 32-bit return register. The old `bool` declaration reverses the
+success interpretation and can discard error bits. The Sequoia declaration and
+compile fixture now require `IOReturn`. This nonvirtual declaration correction
+does not register a queue or change the native vtable.
+
+`initRegistrationInfo` still returns `bool` and expects version 1 with extent
+`0x130`. Native network registration copies its `0x108` base portion, whereas
+Ethernet registration copies `0x130`. The existing legacy Wi-Fi shim uses its
+own larger storage; shrinking its declaration without correcting allocation,
+copy and free together would introduce an overflow. Native queue integration
+must use verified registration ownership, not placeholder queue pointers or
+an isolated size change.
+
 | Request | Observed requirement | Evidence in 24H32 |
 | --- | --- | --- |
 | `apple80211_awdl_sync_params` | Exactly 24 bytes; word at offset `0x14` | IO80211Family `getAWDL_SYNC_PARAMS` at `0xffffff800220e290` requires `req_len == 0x18`; peer-manager fallback clears 24 bytes; Broadcom getter at `0xffffff80016aba68` and setter at `0xffffff80016ae6b2` access the final word |

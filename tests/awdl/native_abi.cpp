@@ -15,6 +15,9 @@ static_assert(sizeof(apple80211_awdl_sync_frame_template) == 16, "Sequoia frame 
 static_assert(__offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "Sequoia template pointer");
 static_assert(__is_same(decltype(static_cast<IO80211SkywalkInterface *>(nullptr)->getSelfMacAddr()),
                         ether_addr), "Sequoia self MAC returns by value");
+static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullptr)->registerEthernetInterface(
+                        nullptr, nullptr, 0, nullptr, nullptr, 0)), IOReturn),
+                        "Sequoia registration returns zero-success IOReturn, not bool");
 
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)
