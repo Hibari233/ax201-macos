@@ -14,7 +14,9 @@ manager. This path precedes optional BSD/BPF delivery in 24H32; an IPv6 interfac
 is not required for management input. BSD data queues remain disabled.
 
 The first implementation is explicitly limited to a root-requested 1–5 second
-lease, one selected owned peer and a fixed legal channel. It uses a separate
+lease, one selected owned peer and a fixed legal channel. Zero-channel idle
+slots remain idle: they emit neither availability events nor synchronization
+frames. The native discovery plan need not visit another channel. It uses a separate
 48-frame cap, one outstanding transmission and the staged 110-TU frame period.
 The original four-frame diagnostics and their 5-ms timing qualification remain
 unchanged. The first four detailed TX traces and all aggregate completion

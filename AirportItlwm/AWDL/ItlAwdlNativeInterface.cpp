@@ -1383,7 +1383,8 @@ void ItlAwdlNativeInterface::runtimeTick() {
     if (!ItlAwdl::nativeRuntimeWindow(boundary, syncParameters.periodTu(), uint8_t(presenceMode),
         static_cast<ItlAwdl::NativeSyncRole>(stagedSyncRole.state), stagedSyncRole.master,
         stagedSyncRole.master, r->awdl.channel, &context)) { fail(kIOReturnBadArgument); return; }
-    if (!runtimeHadWindow || runtimeWindow != context.counter) {
+    if (channelSequence.plan().channels[boundary.slot] &&
+        (!runtimeHadWindow || runtimeWindow != context.counter)) {
         ItlAwdl::NativeAvailabilityWindowStart event = {};
         if (!ItlAwdl::encodeNativeAvailabilityWindowStart(context, &event)) { fail(kIOReturnError); return; }
         // false means the controller's gate completed dispatch, not a peer ACK.
@@ -1513,8 +1514,12 @@ IOReturn ItlAwdlNativeInterface::runSynchronization(AirportItlwm *parent, ItlIwx
             !o->minimumRateValid || !o->masterChannelValid) return kIOReturnNotReady;
         // First engine supports a real fixed-channel schedule. Reject hopping
         // plans rather than advertising radio visits that never happen.
-        for (auto channel : o->channelSequence.plan().channels)
-            if (channel != o->masterChannel) return kIOReturnUnsupported;
+        bool hasWindow = false;
+        for (auto channel : o->channelSequence.plan().channels) {
+            if (channel && channel != o->masterChannel) return kIOReturnUnsupported;
+            hasWindow |= channel != 0;
+        }
+        if (!hasWindow) return kIOReturnNotReady;
         o->retain(); c->object = o;
         o->runtimeRadio = r; o->runtimePhase = RuntimeStarting;
         o->runtimeResult = {};
