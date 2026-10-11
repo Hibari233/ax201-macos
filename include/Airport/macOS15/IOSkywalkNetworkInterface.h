@@ -71,7 +71,7 @@ public:
     virtual const char * getBSDNamePrefix();
     virtual UInt getBSDUnitNumber();
     virtual const char * classNameOverride();
-    virtual void deferBSDAttach(bool);
+    virtual IOReturn deferBSDAttach(bool);
     virtual void reportDetailedLinkStatus(if_link_status const*);
     virtual UInt getTSOOptions(IOSkywalkNetworkInterface::IOSkywalkTSOOptions*);
     virtual void _RESERVEDIOSkywalkNetworkInterface0();

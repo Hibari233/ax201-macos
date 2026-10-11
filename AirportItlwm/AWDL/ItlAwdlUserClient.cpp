@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "ItlAwdlUserClient.hpp"
 #include "AirportItlwmV2.hpp"
+#include "ItlAwdlNativeInterface.hpp"
 
 OSDefineMetaClassAndStructors(ItlAwdlUserClient, IOUserClient)
 
@@ -51,6 +52,29 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
         {prepareCountry, 0, 0, 0, 0},
         {beginLinked, 0, sizeof(ItlAwdlBeginRequest), 0, 0},
         {linkedStatus, 0, 0, 0, sizeof(ItlAwdlLinkedStatusResponse)},
+        {beginData, 0, sizeof(ItlAwdlBeginRequest), 0, 0},
+        {readData, 0, 0, 0, sizeof(ItlAwdlDataResponse)},
+        {dataStatus, 0, 0, 0, sizeof(ItlAwdlDataStatusResponse)},
+        {dataProbe, 0, sizeof(ItlAwdlDataProbeRequest), 0, 0},
+        {nativeInit, 0, sizeof(ItlAwdlNativeInitRequest), 0, sizeof(ItlAwdlNativeInitResponse)},
+        {nativeStart, 0, sizeof(ItlAwdlNativeStartRequest), 0, sizeof(ItlAwdlNativeStartResponse)},
+        {nativeSession, 0, sizeof(ItlAwdlNativeSessionRequest), 0, sizeof(ItlAwdlNativeSessionResponse)},
+        {nativePackets, 0, sizeof(ItlAwdlNativePacketRequest), 0, sizeof(ItlAwdlNativePacketResponse)},
+        {nativeQueues, 0, sizeof(ItlAwdlNativeQueueRequest), 0, sizeof(ItlAwdlNativeQueueResponse)},
+        {nativeTransport, 0, sizeof(ItlAwdlNativeTransportRequest), 0, sizeof(ItlAwdlNativeTransportResponse)},
+        {nativeBSD, 0, sizeof(ItlAwdlNativeBSDRequest), 0, sizeof(ItlAwdlNativeBSDResponse)},
+        {nativeConfigure, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeConfigureResponse)},
+        {nativeTemplate, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeTemplateResponse)},
+        {nativeRadio, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeRadioResponse)},
+        {nativeSyncTx, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeTiming, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeTimingResponse)},
+        {nativeUnicastTx, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeP2pRadio, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeRadioResponse)},
+        {nativeP2pUnicastTx, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeP2pTxSeries, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeP2pPsfSeries, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeSyncTxResponse)},
+        {nativeActivationPreflight, 0, sizeof(ItlAwdlNativeConfigureRequest), 0, sizeof(ItlAwdlNativeConfigureResponse)},
+        {nativeRuntime, 0, sizeof(ItlAwdlBeginRequest), 0, sizeof(ItlAwdlNativeRuntimeResponse)},
     };
     static_assert(sizeof(methods) / sizeof(methods[0]) == ItlAwdlMethodCount, "dispatch table");
     if (selector >= ItlAwdlMethodCount) return kIOReturnUnsupported;
@@ -63,6 +87,120 @@ IOReturn ItlAwdlUserClient::externalMethod(uint32_t selector, IOExternalMethodAr
 IOReturn ItlAwdlUserClient::status(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
     return self->radio->awdlCommand(self, ItlAwdlStatus, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::nativeInit(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeInitialization(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeInitRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeInitResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativePackets(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probePackets(self->driver, self->radio,
+        static_cast<const ItlAwdlNativePacketRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativePacketResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeBSD(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::managedBSD(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeBSDRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeBSDResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeConfigure(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeConfiguration(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeConfigureResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeRuntime(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::runSynchronization(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeRuntimeResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeActivationPreflight(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeActivationPreflight(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeConfigureResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeTemplate(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeTemplate(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeTemplateResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeTiming(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeTiming(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeConfigureRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeTimingResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeRadio(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeRadioResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeSyncTx(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    auto out = static_cast<ItlAwdlNativeSyncTxResponse *>(a->structureOutput);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput), &out->radio, out);
+}
+IOReturn ItlAwdlUserClient::nativeP2pRadio(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeRadioResponse *>(a->structureOutput), nullptr, false, true);
+}
+IOReturn ItlAwdlUserClient::nativeUnicastTx(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    auto out = static_cast<ItlAwdlNativeSyncTxResponse *>(a->structureOutput);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput), &out->radio, out, true);
+}
+IOReturn ItlAwdlUserClient::nativeP2pUnicastTx(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    auto out = static_cast<ItlAwdlNativeSyncTxResponse *>(a->structureOutput);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput), &out->radio, out, true, true);
+}
+IOReturn ItlAwdlUserClient::nativeTransport(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::managedTransport(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeTransportRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeTransportResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeP2pTxSeries(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    auto out = static_cast<ItlAwdlNativeSyncTxResponse *>(a->structureOutput);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput), &out->radio, out, true, true, true);
+}
+IOReturn ItlAwdlUserClient::nativeP2pPsfSeries(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    auto out = static_cast<ItlAwdlNativeSyncTxResponse *>(a->structureOutput);
+    return ItlAwdlNativeInterface::probeRadio(self->driver, self->radio,
+        static_cast<const ItlAwdlBeginRequest *>(a->structureInput), &out->radio, out, false, true, true);
+}
+IOReturn ItlAwdlUserClient::nativeQueues(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeQueues(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeQueueRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeQueueResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeStart(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::probeStart(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeStartRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeStartResponse *>(a->structureOutput));
+}
+IOReturn ItlAwdlUserClient::nativeSession(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return ItlAwdlNativeInterface::managedSession(self->driver, self->radio,
+        static_cast<const ItlAwdlNativeSessionRequest *>(a->structureInput),
+        static_cast<ItlAwdlNativeSessionResponse *>(a->structureOutput));
 }
 IOReturn ItlAwdlUserClient::begin(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
@@ -119,6 +257,22 @@ IOReturn ItlAwdlUserClient::beginLinked(OSObject *o, void *, IOExternalMethodArg
 IOReturn ItlAwdlUserClient::linkedStatus(OSObject *o, void *, IOExternalMethodArguments *a) {
     auto self = static_cast<ItlAwdlUserClient *>(o);
     return self->radio->awdlCommand(self, ItlAwdlLinkedStatus, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::beginData(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return self->radio->awdlCommand(self, ItlAwdlBeginData, a->structureInput, nullptr);
+}
+IOReturn ItlAwdlUserClient::readData(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return self->radio->awdlCommand(self, ItlAwdlReadData, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::dataStatus(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return self->radio->awdlCommand(self, ItlAwdlDataStatus, nullptr, a->structureOutput);
+}
+IOReturn ItlAwdlUserClient::dataProbe(OSObject *o, void *, IOExternalMethodArguments *a) {
+    auto self = static_cast<ItlAwdlUserClient *>(o);
+    return self->radio->awdlCommand(self, ItlAwdlDataProbe, a->structureInput, nullptr);
 }
 
 IOReturn AirportItlwm::newUserClient(task_t task, void *token, UInt32 type,

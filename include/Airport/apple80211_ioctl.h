@@ -910,6 +910,12 @@ struct apple80211_awdl_election_metric
 {
     uint32_t    version;
     uint32_t    metric;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 requires 12 bytes. The peer manager resolves the override flag
+    // before dispatching the resulting metric word to the radio backend.
+    uint8_t     override_metric;
+    uint8_t     reserved_09[3];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_sync_enabled
@@ -993,6 +999,10 @@ struct apple80211_awdl_secondary_master_channel {
 struct apple80211_awdl_min_rate {
     uint32_t    version;
     uint8_t    min_rate;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // The 24H32 ioctl extent is eight bytes, although the rate occupies one.
+    uint8_t     reserved_05[3];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_election_rssi_thresholds {
@@ -1000,6 +1010,11 @@ struct apple80211_awdl_election_rssi_thresholds {
     uint32_t    unk1;
     uint32_t    unk2;
     uint32_t    unk3;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 validates a 20-byte ioctl and accesses a fourth threshold at 16.
+    // Each request word is normalized to its signed low byte by the radio.
+    uint32_t    unk4;
+#endif
 } __attribute__((packed));
 
 struct apple80211_channel_sequence {
@@ -1009,6 +1024,19 @@ struct apple80211_channel_sequence {
 
 struct apple80211_awdl_sync_channel_sequence {
     uint32_t    version;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32 has 32 full channel records, not 128 three-byte records.
+    // Its producer, radio builder and getter all use the same 12-byte stride.
+    uint8_t     flags;
+    uint8_t     length;
+    uint8_t     encoding;
+    uint8_t     step_count;
+    uint8_t     duplicate_count;
+    uint8_t     fill_channel;
+    uint8_t     reserved_0a[2];
+    struct apple80211_channel channels[32];
+    uint8_t     opaque_tail[4];
+#else
     uint8_t     pad1;
     uint8_t     length;             // 5
     uint8_t     encoding;           // 6
@@ -1017,9 +1045,15 @@ struct apple80211_awdl_sync_channel_sequence {
     uint8_t     fill_channel;       // 9
     uint8_t     pad2[6];
     struct apple80211_channel_sequence seqs[APPLE80211_MAX_CHANNELS];
+#endif
 } __attribute__((packed));
 
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, channels) == 12, "24H32 channel records offset");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, opaque_tail) == 396, "24H32 opaque tail offset");
+#else
 static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, seqs) == 16, "seqs offset error");
+#endif
 
 static_assert(sizeof(struct apple80211_awdl_sync_channel_sequence) == 0x190, "apple80211_awdl_sync_channel_sequence struct corrupt");
 
@@ -1039,6 +1073,14 @@ struct apple80211_awdl_extension_state_machine_parameter {
 struct apple80211_awdl_sync_state {
     uint32_t    version;
     uint32_t    state;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // 24H32's producer/backend agree on these fields in the 24-byte request.
+    uint8_t     master[6];
+    uint8_t     reserved_0e[2];
+    uint32_t    operation_mode;
+    uint8_t     additional_role_flags;
+    uint8_t     reserved_15[3];
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_sync_params {
@@ -1047,6 +1089,10 @@ struct apple80211_awdl_sync_params {
     uint32_t    availability_window_period;
     uint32_t    extension_length;
     uint32_t    synchronization_frame_period;
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+    // Modified 2026-10-10: both the 24H32 getter and setter access this word.
+    uint32_t    unknown_14;
+#endif
 } __attribute__((packed));
 
 struct apple80211_awdl_cap {

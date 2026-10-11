@@ -144,6 +144,8 @@
 #ifdef ITLWM_AWDL_EXPERIMENTAL
 #include <AWDL/ItlAwdlABI.h>
 #include <AWDL/AwdlClock.h>
+#include <AWDL/AwdlRadioObservation.h>
+#include <AWDL/AwdlRoc.h>
 #include <IOKit/IOTimerEventSource.h>
 #endif
 
@@ -153,14 +155,83 @@ class ItlIwx : public ItlHalService, ItlDriverInfo, ItlDriverController {
 public:
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     IOReturn awdlCommand(OSObject *, uint32_t, const void *, void *);
+    // Keep native init/dispose serialized with radio diagnostics and detach.
+    friend class ItlAwdlNativeInterface;
     bool awdlActive() const { return awdl.session == ItlAwdlStarting || awdl.session == ItlAwdlListening; }
     bool awdlLinked() const { return awdl.linked && awdlActive(); }
     bool awdlCommandBusy() const { return awdl.commandBusy; }
     void awdlStop(uint32_t reason, uint32_t error = 0);
     void awdlDetach();
-    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t);
+    void awdlObserve(mbuf_t, uint32_t, int32_t, uint32_t, uint64_t, bool, bool);
     void awdlCountryHint(uint16_t, uint8_t);
 private:
+    // Not part of the radio diagnostic context: radio resets must not erase
+    // ownership of a native object retained by the controller.
+    bool awdlNativeInterfaceActive = false;
+    // Internal qualification lease; only the explicit native-template trial
+    // permits TX. The probe retains this object through cleanup; userspace
+    // cannot set or supply this identity.
+    OSObject *awdlNativeRadioOwner = nullptr;
+    bool awdlNativeTxQualification = false, awdlNativeP2pQualification = false;
+    bool awdlNativeTxSeriesObservation = false;
+    bool awdlNativeRuntime = false; // Separate 48-frame runtime; original trials remain four-frame.
+    ItlAwdl::P2pSessionProtection awdlNativeP2pSession;
+    uint32_t awdlNativeP2pCommandVersion = 0, awdlNativeP2pNotifVersion = 0;
+    int awdlStartNativeP2pSession();
+    void awdlPublishNativeP2pSession(IORegistryEntry *);
+    enum NativeRadioResetSource : uint32_t {
+        NativeResetUnknown = 1, NativeResetFirmware, NativeResetHardware,
+        NativeResetRfKill, NativeResetThermal, NativeResetWatchdog,
+        NativeResetState, NativeResetWake
+    };
+    struct NativeRadioFault {
+        uint32_t source, events, detail1, detail2, generation, flags;
+        uint32_t submitted, pending, queueId, queued, queueHead, queueTail, rxHead;
+        uint32_t netState, txTimer;
+        uint64_t remainingUs;
+        struct Firmware {
+            // 0: not read, 1: invalid pointer, 2: read failed, 3: empty, 4: valid.
+            uint32_t readStatus, errorId, data1, data2, data3, command, lastCommand, time;
+        } lmac, umac;
+    } awdlNativeFault = {};
+    void awdlRecordNativeRadioReset(NativeRadioResetSource, uint32_t = 0, uint32_t = 0);
+    void awdlPublishNativeRadioFault(IORegistryEntry *);
+    uint8_t awdlNativeAddress[6] = {}, awdlNativeRateMbps = 0;
+    uint32_t awdlNativeTxGp2 = 0, awdlNativeTimingSamples = 0, awdlNativeTimingInvalid = 0;
+    uint32_t awdlNativeMaxCompletionUs = 0, awdlNativeLastRate = 0;
+    // Bounded instrumentation for the explicit four-frame qualification only.
+    // The filter writes an atomic absolute clock; all other fields use the gate.
+    uint32_t awdlNativeTraceArmed = 0;
+    uint64_t awdlNativeFilterAbsolute = 0;
+    uint64_t awdlNativeBatchHostUs = 0, awdlNativeBatchFilterAbsolute = 0;
+    struct NativeTxTrace {
+        uint64_t freshHostUs, doorbellHostUs, returnHostUs, completeHostUs;
+        uint64_t batchHostUs, filterAbsolute;
+        uint32_t frameGp2, freshGp2, completeGp2, qid, index;
+        uint32_t mediaUs, btKill, rtsFailures, frameFailures, firmwareStatus, hostError;
+        uint64_t dmaReplyHostUs;
+        uint32_t nextSequence, packetLength, dmaProbeSamples, dmaPendingMax, dmaScanTruncated;
+        uint32_t dmaStatus, dmaMediaUs;
+        uint32_t commandOffloadAssist, commandHeaderLength;
+        uint32_t ackCount, firstAckGp2, lastAckGp2;
+        uint64_t firstAckHostUs;
+        ItlAwdl::PendingRxObservation beforeAckRx;
+        uint32_t macReadSamples, macClockReadySamples, macSleepingSamples, macInvalidSamples;
+        uint32_t pendingClockReads, pendingClockMaxReadUs;
+        uint64_t firstPendingClockHostUs, lastPendingClockHostUs;
+        uint32_t peerWindowElapsedUs, peerWindowRemainingUs, localWindowRemainingUs;
+        uint16_t peerWindowCounter;
+        uint8_t peerWindowChannel;
+        bool completed, clockValid, dmaProbeSupported, unicast;
+    } awdlNativeTrace[4] = {};
+    uint32_t awdlNativeTraceCount = 0, awdlNativeTraceIndex = 0;
+    void awdlNativeTxDoorbell(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    uint64_t awdlObserveNativeTxDma();
+    void awdlPublishNativeTxTiming(IORegistryEntry *);
+    void awdlPublishNativePeerProfile(IORegistryEntry *);
+    ItlAwdl::SyncWireProfile awdlNativePeerProfile = {};
+    uint32_t awdlNativePeerProfileSamples = 0;
+    ItlAwdl::ObservedReservation awdlObservedReservation;
     struct {
         bool ready = false;
         bool rejected = false;
@@ -168,6 +239,9 @@ private:
         IOTimerEventSource *timer = nullptr;
         IOTimerEventSource *runTimer = nullptr;
         ItlAwdlTimedFrameResponse *ring = nullptr;
+        ItlAwdlDataResponse *dataRing = nullptr;
+        ItlAwdlDataStatusResponse dataStatus = {};
+        uint32_t dataHead = 0;
         uint32_t head = 0, count = 0, session = 0, channel = 0;
         uint32_t lastError = 0, stopReason = 0;
         uint64_t rxTotal = 0, rxAwdl = 0, rxPeer = 0, rxDropped = 0, rxInvalid = 0;
@@ -205,10 +279,15 @@ private:
     static IOReturn awdlCommandGated(OSObject *, void *, void *, void *, void *);
     static void awdlTimeout(OSObject *, IOTimerEventSource *);
     static void awdlRunTimeout(OSObject *, IOTimerEventSource *);
-    IOReturn awdlBegin(OSObject *, const ItlAwdlBeginRequest *, bool linked = false);
+    IOReturn awdlBegin(OSObject *, const ItlAwdlBeginRequest *, bool linked = false, bool data = false);
+    void awdlObserveData(const uint8_t *, size_t, uint32_t, int32_t, uint32_t, bool);
     bool awdlLinkMatches(bool requireChannel = true) const;
     void awdlFinishLinkedStop();
     IOReturn awdlProbe(OSObject *, bool scheduled = false);
+    IOReturn awdlDataProbe(OSObject *, const ItlAwdlDataProbeRequest *);
+    IOReturn awdlTransmitGuard(OSObject *, bool data, bool scheduled, bool native = false);
+    IOReturn awdlSubmitNativeSync(OSObject *, const uint8_t *, size_t, uint32_t, bool unicast = false);
+    IOReturn awdlSubmitDiagnostic(const uint8_t *, size_t);
     IOReturn awdlReadClock(ItlAwdlClockResponse *);
     IOReturn awdlRun(OSObject *, const ItlAwdlRunRequest *);
     IOReturn awdlRefreshCountry(OSObject *, bool station = false);
@@ -224,6 +303,12 @@ public:
     IOReturn enable(IONetworkInterface *netif) override;
     IOReturn disable(IONetworkInterface *netif) override;
     virtual struct ieee80211com *get80211Controller() override;
+#ifdef AIRPORT_WCL
+    IOReturn setScanHomeAwayTime(uint32_t milliseconds) override {
+        com.sc_ic.ic_wcl_scan_away_time_ms = milliseconds;
+        return kIOReturnSuccess;
+    }
+#endif
     
     static bool intrFilter(OSObject *object, IOFilterInterruptEventSource *src);
     static IOReturn _iwx_start_task(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);

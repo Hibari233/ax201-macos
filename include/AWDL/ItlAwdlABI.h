@@ -11,8 +11,9 @@ enum {
     ITL_AWDL_RING_COUNT = 16,
     ITL_AWDL_MAX_DWELL_MS = 30000,
     ITL_AWDL_MAX_EVENTS = 32,
+    ITL_AWDL_DATA_MTU = 1500,
 };
-enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlMethodCount };
+enum ItlAwdlMethod { ItlAwdlStatus = 0, ItlAwdlBegin, ItlAwdlEnd, ItlAwdlRead, ItlAwdlReadRejected, ItlAwdlProbe, ItlAwdlTxStatus, ItlAwdlRegStatus, ItlAwdlReadTimed, ItlAwdlClock, ItlAwdlRunTest, ItlAwdlRunStatus, ItlAwdlPrepareCountry, ItlAwdlBeginLinked, ItlAwdlLinkedStatus, ItlAwdlBeginData, ItlAwdlReadData, ItlAwdlDataStatus, ItlAwdlDataProbe, ItlAwdlNativeInit, ItlAwdlNativeStart, ItlAwdlNativeSession, ItlAwdlNativePackets, ItlAwdlNativeQueues, ItlAwdlNativeTransport, ItlAwdlNativeBSD, ItlAwdlNativeConfigure, ItlAwdlNativeTemplate, ItlAwdlNativeRadio, ItlAwdlNativeSyncTx, ItlAwdlNativeTiming, ItlAwdlNativeUnicastTx, ItlAwdlNativeP2pRadio, ItlAwdlNativeP2pUnicastTx, ItlAwdlNativeP2pTxSeries, ItlAwdlNativeP2pPsfSeries, ItlAwdlNativeActivationPreflight, ItlAwdlNativeRuntime, ItlAwdlMethodCount };
 enum ItlAwdlSession { ItlAwdlIdle = 0, ItlAwdlStarting, ItlAwdlListening, ItlAwdlStopping };
 enum ItlAwdlStopReason { ItlAwdlNotStopped = 0, ItlAwdlClosed, ItlAwdlExpired, ItlAwdlRadioError, ItlAwdlPowerChange, ItlAwdlDetached, ItlAwdlWifiRequest, ItlAwdlLinkChanged };
 
@@ -44,9 +45,9 @@ struct ItlAwdlTxStatusResponse {
 };
 struct ItlAwdlTimedFrameResponse {
     ItlAwdlFrameResponse frame; // Existing selector 3 still returns this prefix.
-    uint32_t clock_flags; // bit 0: firmware RX-on-air timestamps present.
+    uint32_t clock_flags; // bit 0: RX GP2 valid; bit 1: RX TSF valid (not PHY data).
     uint32_t gp2_us; // Local device clock, wraps at 2^32 us; resets on radio init.
-    uint64_t tsf_us; // Firmware RX TSF, kept separate from GP2 and host uptime.
+    uint64_t tsf_us; // Zero if bit 1 is clear. Separate from GP2 and host uptime.
 };
 struct ItlAwdlRegStatusResponse {
     uint32_t version, channel, channel_flags, query_count, last_query_error;
@@ -57,6 +58,188 @@ struct ItlAwdlRegStatusResponse {
 struct ItlAwdlLinkedStatusResponse {
     uint32_t version, linked_mode, firmware_generation, start_generation;
     uint32_t channel, filter_enabled, restore_error, link_matches;
+};
+// BeginData uses BeginRequest: exclusive monitor, one owned peer, <=30 s.
+// RX by default; legacy management probes and timed radio tests disallowed.
+// DataProbe explicitly submits a fixed diagnostic echo, not arbitrary bytes.
+struct ItlAwdlDataResponse {
+    uint32_t version, length, channel;
+    int32_t rssi_dbm;
+    uint64_t timestamp_us;
+    uint32_t gp2_us;
+    uint16_t sequence, reserved;
+    uint8_t source[6], destination[6];
+    uint8_t ipv6[ITL_AWDL_DATA_MTU];
+};
+struct ItlAwdlDataStatusResponse {
+    uint32_t version, enabled, accepted, malformed;
+    uint32_t unsupported, dropped, queued, reserved;
+};
+struct ItlAwdlDataProbeRequest {
+    uint32_t version, length, token, reserved; // IPv6 length 64..1500; nonzero run token.
+};
+// No radio operations or published BSD interface. Each object is disposed
+// before returning. stop_after: 0 full init, 1 after base init, 2 after VIF init.
+// The two early exits exercise cleanup, not allocation failure inside Apple code.
+struct ItlAwdlNativeInitRequest {
+    uint32_t version, iterations, stop_after, reserved;
+};
+struct ItlAwdlNativeInitResponse {
+    uint32_t version, attempted, base_initialized, virtual_initialized;
+    uint32_t released, live_before, live_after, role;
+    uint32_t methods_checked, method_failures, provider_open_after, last_error;
+    uint32_t provider_opened;
+};
+// Native start/stop only: no BSD/queue registration, link enable or radio TX.
+// fail_peer_creation == 1 injects failure at our createPeerManager override.
+// Real creation permits one cycle, once per boot; subsequent calls return
+// kIOReturnNotPermitted. Injected failures permit 1..4 cycles without a manager.
+struct ItlAwdlNativeStartRequest {
+    uint32_t version, iterations, fail_peer_creation, reserved;
+};
+struct ItlAwdlNativeStartResponse {
+    uint32_t version, attempted, initialized, attached;
+    uint32_t start_succeeded, expected_start_failures, peer_managers_created, peer_managers_released;
+    uint32_t stopped, partial_cleanups, released, live_before;
+    uint32_t live_after, provider_open_after, controller_pointer_after, last_error;
+    uint32_t backend_calls, bsd_interfaces, cleanup_errors, peer_creation_calls;
+    uint32_t peer_live_before, peer_live_after;
+};
+// Retain a disabled, unregistered native object across client connections.
+// Create is idempotent while retained; retire prevents recreation this boot.
+enum ItlAwdlNativeSessionOperation { ItlAwdlNativeInspect, ItlAwdlNativeCreate, ItlAwdlNativeRetire };
+enum ItlAwdlNativeSessionState { ItlAwdlNativeUnused, ItlAwdlNativeRetained, ItlAwdlNativeRetired };
+struct ItlAwdlNativeSessionRequest { uint32_t version, operation, reserved[2]; };
+struct ItlAwdlNativeSessionResponse {
+    uint32_t version, state, role, interface_count, peer_count, provider_open;
+    uint32_t controller_pointer, bsd_interfaces, backend_calls, boot_reserved;
+    uint32_t last_error, reserved;
+    uint64_t registry_id;
+};
+// Isolated CPU-only native packet pools. No queues, interface or radio TX.
+// failure: 0 normal; 1 first packet; 2 fourth packet; 3 first memory segment.
+struct ItlAwdlNativePacketRequest { uint32_t version, iterations, failure, reserved; };
+struct ItlAwdlNativePacketResponse {
+    uint32_t version, attempted, initialized, expected_failures;
+    uint32_t packet_factories, segment_factories, injected_failures, allocations;
+    uint32_t prepared, returned, pattern_checks, bytes_checked;
+    uint32_t metadata_checks, bounds_denied, pools_before, pools_after;
+    uint32_t packets_before, packets_after, last_error, reserved;
+};
+// Disabled native queues, without interface registration, channel/ring or RF.
+// stop_after deliberately exits after a setup stage; it is not an Apple
+// allocation-failure injection. 1 pool, 2 TX, 3 RX, 4 TX work source,
+// 5 RX work source, 6 TX initialize, 7 RX initialize; 0 runs two reuse cycles.
+struct ItlAwdlNativeQueueRequest { uint32_t version, iterations, stop_after, reserved; };
+struct ItlAwdlNativeQueueResponse {
+    uint32_t version, attempted, completed, expected_stops;
+    uint32_t pools_created, tx_created, rx_created, source_adds;
+    uint32_t source_removes, initialized, finalized, queues_released;
+    uint32_t metadata_checks, rejections, allocations, returned;
+    uint32_t bytes_checked, callback_calls, pools_before, pools_after;
+    uint32_t packets_before, packets_after, tx_before, tx_after;
+    uint32_t rx_before, rx_after, cleanup_errors, last_error;
+};
+// Register disabled queues with the retained native object, without publishing
+// a BSD client, enabling a ring, or transmitting. The session must exist first.
+// Prepare is idempotent when registered. stop_after 1..6 is an early cleanup
+// checkpoint (pool, TX, RX, TX source, RX source, registration), not fault injection.
+enum ItlAwdlNativeTransportOperation { ItlAwdlTransportInspect, ItlAwdlTransportPrepare, ItlAwdlTransportClear };
+struct ItlAwdlNativeTransportRequest { uint32_t version, operation, stop_after, reserved; };
+struct ItlAwdlNativeTransportResponse {
+    uint32_t version, registered, last_stage, prepare_calls;
+    uint32_t registrations, deregistrations, callback_calls, cleanup_errors;
+    uint32_t interface_count, peer_count, pool_count, packet_count;
+    uint32_t tx_count, rx_count, tx_interface, rx_interface;
+    uint32_t tx_enabled, rx_enabled, bsd_interfaces, registration_copies;
+    uint32_t last_error, reserved;
+    uint64_t registry_id;
+};
+// Publish the retained interface to the native BSD client. Publication is
+// asynchronous and persists until system-managed termination/reboot. TX stays
+// unready until the radio backend exists. A published object cannot be retired
+// through the earlier manual probe selector.
+enum ItlAwdlNativeBSDOperation { ItlAwdlBSDInspect, ItlAwdlBSDPublish };
+struct ItlAwdlNativeBSDRequest { uint32_t version, operation, reserved[2]; };
+struct ItlAwdlNativeBSDResponse {
+    uint32_t version, publication_requested, publish_calls, prepare_calls;
+    uint32_t prepare_error, enable_calls, enable_denied, bsd_present;
+    uint32_t bsd_clients, tx_initialize_calls, rx_initialize_calls, tx_initialized;
+    uint32_t rx_initialized, tx_initialize_error, rx_initialize_error, tx_kernel_queue;
+    uint32_t rx_kernel_queue, tx_enabled, rx_enabled, callback_calls;
+    uint32_t last_error, reserved;
+    uint64_t registry_id;
+    char bsd_name[16];
+};
+// One native configure() call on the retained, unpublished, disabled object.
+// Repeating run returns the saved result, without another native invocation.
+// The backend still refuses RF enable; native_result == 0 can be a no-op
+// (e.g. the native manager is not powered), never proof of configuration.
+enum ItlAwdlNativeConfigureOperation { ItlAwdlConfigureInspect, ItlAwdlConfigureRun };
+enum { ITL_AWDL_CONFIGURE_TRACE_COUNT = 32 };
+struct ItlAwdlNativeConfigureRequest { uint32_t version, operation, reserved[2]; };
+struct ItlAwdlNativeBackendTrace { uint32_t vptr_offset, result; };
+struct ItlAwdlNativeConfigureResponse {
+    uint32_t version, present, attempted, native_result;
+    uint32_t backend_before, backend_after, trace_count, trace_dropped;
+    uint32_t interface_enabled, tx_enabled, rx_enabled, bsd_present;
+    uint64_t registry_id;
+    ItlAwdlNativeBackendTrace trace[ITL_AWDL_CONFIGURE_TRACE_COUNT];
+};
+// One native updateSyncFrameTemplate() call after disabled configuration.
+// Input uses ConfigureRequest's inspect/run operations; repeated run returns
+// the saved result. No raw template bytes, addresses, or host clock are exposed.
+// encoded_length describes a CPU-only specimen with a synthetic clock, not TX.
+struct ItlAwdlNativeTemplateResponse {
+    ItlAwdlNativeConfigureResponse call;
+    uint32_t template_length, template_revision, tlv_count, encoded_length;
+    uint32_t tlv_kinds[8];
+};
+// One native get/set/get timing transaction after configure and before the
+// template. Input is ConfigureRequest. Only the audited default profile is
+// staged; repeat run returns its saved result. No RF or sync enable occurs.
+// Parameter arrays: version, AW length, AW period, extension, frame period,
+// opaque final word. Native getters hide some backend errors: inspect trace.
+struct ItlAwdlNativeTimingResponse {
+    ItlAwdlNativeConfigureResponse call;
+    uint32_t get_before_result, set_result, get_after_result, ready;
+    uint32_t before[6], after[6];
+};
+// Synchronous, receive-only native radio qualification. Input is BeginRequest:
+// channel must be zero (use staged master channel), dwell 1000..5000 ms, and
+// peer is the user's own test device. STA must already be off. The one retained
+// manager stays disabled; no native RX handoff, frame TX or BSD publication.
+struct ItlAwdlNativeRadioResponse {
+    uint32_t version, attempted, radio_ready, radio_stopped;
+    uint32_t last_error, stop_reason, channel, samples;
+    uint32_t clock_valid, rx_clock_valid, encoded, encoded_length;
+    uint32_t state_before, state_after, mode_before, mode_after;
+    uint32_t flags_before, flags_after, generation_before, generation_after;
+    uint32_t interface_enabled, tx_enabled, rx_enabled, bsd_present;
+    uint32_t backend_before, backend_after, creation_before, creation_after;
+    uint64_t registry_id, rx_total, rx_awdl, rx_peer, rx_dropped, rx_invalid;
+};
+// Explicit bounded synchronization TX qualification, separate from selector 28.
+// Same BeginRequest; at most four driver-built PSFs, no arbitrary user payload.
+// Completion timing is a conservative bound, NOT an on-air TX timestamp.
+struct ItlAwdlNativeSyncTxResponse {
+    ItlAwdlNativeRadioResponse radio;
+    uint32_t submitted, completed, succeeded, failed, pending, aborted;
+    uint32_t timing_samples, timing_invalid, max_completion_delay_us;
+    uint32_t first_counter, last_counter, windows_used, min_rate_mbps;
+    uint32_t last_rate_flags, limit, last_firmware_status;
+};
+// Bounded native synchronization engine. The caller pins ownership while an
+// IOTimerEventSource performs activation, native AW events, RX and action TX.
+// BSD/data queues remain separate; these counters do not prove AirDrop.
+struct ItlAwdlNativeRuntimeResponse {
+    ItlAwdlNativeConfigureResponse activation;
+    uint32_t attempted, ready, stopped, last_error;
+    uint32_t timer_ticks, clock_valid, aw_events, aw_event_errors;
+    uint32_t rx_handed_off, rx_rejected, rx_last_error, role_updates;
+    uint32_t submitted, completed, succeeded, failed, pending, aborted;
+    uint32_t timing_samples, timing_invalid, max_completion_delay_us, stop_reason;
+    uint32_t sync_enabled_after, native_disable_calls, tx_limit, channel;
 };
 enum ItlAwdlTestMode { ItlAwdlTestNone = 0, ItlAwdlTestWake, ItlAwdlTestProbe, ItlAwdlTestFollow, ItlAwdlTestHop };
 struct ItlAwdlClockResponse {
@@ -81,11 +264,55 @@ struct ItlAwdlRunStatusResponse {
 };
 #ifdef __cplusplus
 static_assert(sizeof(ItlAwdlBeginRequest) == 24, "AWDL request ABI");
+static_assert(sizeof(ItlAwdlDataProbeRequest) == 16, "AWDL fixed echo request ABI");
+static_assert(sizeof(ItlAwdlNativeInitRequest) == 16, "native init request ABI");
+static_assert(sizeof(ItlAwdlNativeInitResponse) == 52, "native init response ABI");
+static_assert(ItlAwdlDataProbe == 18 && ItlAwdlNativeInit == 19, "append-only native init ABI");
+static_assert(ItlAwdlNativeStart == 20, "append-only native start ABI");
+static_assert(sizeof(ItlAwdlNativeStartRequest) == 16, "native start request ABI");
+static_assert(sizeof(ItlAwdlNativeStartResponse) == 88, "native start response ABI");
+static_assert(ItlAwdlNativeSession == 21, "append-only native retained session ABI");
+static_assert(sizeof(ItlAwdlNativeSessionRequest) == 16, "native session request ABI");
+static_assert(sizeof(ItlAwdlNativeSessionResponse) == 56, "native session response ABI");
+static_assert(ItlAwdlNativePackets == 22, "append-only native packet ABI");
+static_assert(sizeof(ItlAwdlNativePacketRequest) == 16, "native packet request ABI");
+static_assert(sizeof(ItlAwdlNativePacketResponse) == 80, "native packet response ABI");
+static_assert(ItlAwdlNativeBSD == 25, "append-only native BSD ABI");
+static_assert(sizeof(ItlAwdlNativeBSDRequest) == 16, "native BSD request ABI");
+static_assert(sizeof(ItlAwdlNativeBSDResponse) == 112, "native BSD response ABI");
+static_assert(ItlAwdlNativeConfigure == 26, "append-only native configure ABI");
+static_assert(sizeof(ItlAwdlNativeConfigureRequest) == 16, "native configure request ABI");
+static_assert(sizeof(ItlAwdlNativeConfigureResponse) == 312, "native configure response ABI");
+static_assert(ItlAwdlNativeTemplate == 27, "append-only native template ABI");
+static_assert(sizeof(ItlAwdlNativeTemplateResponse) == 360, "native template response ABI");
+static_assert(ItlAwdlNativeRadio == 28, "append-only native radio ABI");
+static_assert(sizeof(ItlAwdlNativeRadioResponse) == 160, "native radio response ABI");
+static_assert(ItlAwdlNativeSyncTx == 29, "append-only native sync TX ABI");
+static_assert(sizeof(ItlAwdlNativeSyncTxResponse) == 224, "native sync TX response ABI");
+static_assert(ItlAwdlNativeUnicastTx == 31, "append-only native unicast TX ABI");
+static_assert(ItlAwdlNativeP2pRadio == 32, "append-only native P2P radio ABI");
+static_assert(ItlAwdlNativeP2pUnicastTx == 33, "append-only native P2P TX ABI");
+static_assert(ItlAwdlNativeP2pTxSeries == 34, "append-only native P2P TX series ABI");
+static_assert(ItlAwdlNativeP2pPsfSeries == 35, "append-only native P2P PSF series ABI");
+static_assert(ItlAwdlNativeActivationPreflight == 36, "append-only native activation preflight ABI");
+static_assert(ItlAwdlNativeRuntime == 37 && ItlAwdlMethodCount == 38, "append-only native runtime ABI");
+static_assert(sizeof(ItlAwdlNativeRuntimeResponse) == 416, "native runtime response ABI");
+static_assert(ItlAwdlNativeTiming == 30, "append-only native timing ABI");
+static_assert(sizeof(ItlAwdlNativeTimingResponse) == 376, "native timing response ABI");
+static_assert(ItlAwdlNativeTransport == 24, "append-only native transport ABI");
+static_assert(sizeof(ItlAwdlNativeTransportRequest) == 16, "native transport request ABI");
+static_assert(sizeof(ItlAwdlNativeTransportResponse) == 96, "native transport response ABI");
+static_assert(ItlAwdlNativeQueues == 23, "append-only native queue ABI");
+static_assert(sizeof(ItlAwdlNativeQueueRequest) == 16, "native queue request ABI");
+static_assert(sizeof(ItlAwdlNativeQueueResponse) == 112, "native queue response ABI");
 static_assert(sizeof(ItlAwdlStatusResponse) == 104, "AWDL status ABI");
 static_assert(sizeof(ItlAwdlFrameResponse) == 2072, "AWDL frame ABI");
 static_assert(sizeof(ItlAwdlTxStatusResponse) == 36, "AWDL TX status ABI");
 static_assert(sizeof(ItlAwdlRegStatusResponse) == 24, "AWDL regulatory status ABI");
 static_assert(sizeof(ItlAwdlLinkedStatusResponse) == 32, "AWDL linked status ABI");
+static_assert(sizeof(ItlAwdlDataResponse) == 1544, "AWDL IPv6 RX ABI");
+static_assert(sizeof(ItlAwdlDataStatusResponse) == 32, "AWDL IPv6 status ABI");
+static_assert(ItlAwdlBeginData == 15 && ItlAwdlReadData == 16 && ItlAwdlDataStatus == 17, "append-only ABI");
 static_assert(sizeof(ItlAwdlTimedFrameResponse) == 2088, "AWDL timed RX ABI");
 static_assert(sizeof(ItlAwdlClockResponse) == 48, "AWDL live clock ABI");
 static_assert(sizeof(ItlAwdlRunRequest) == 16, "AWDL run request ABI");

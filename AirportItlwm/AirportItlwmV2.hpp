@@ -52,6 +52,9 @@ extern "C" {
 const char *convertApple80211IOCTLToString(signed int cmd);
 }
 
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+class ItlAwdlNativeInterface;
+#endif
 class AirportItlwm : public IO80211Controller {
     OSDeclareDefaultStructors(AirportItlwm)
 #define IOCTL(REQ_TYPE, REQ, DATA_TYPE) \
@@ -288,6 +291,11 @@ public:
     IO80211FaultReporter *driverFaultReporter;
 #else
     CCStream *driverFaultReporter;
+#endif
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+private:
+    friend class ItlAwdlNativeInterface;
+    ItlAwdlNativeInterface *nativeAwdlInterface = nullptr;
 #endif
 };
 

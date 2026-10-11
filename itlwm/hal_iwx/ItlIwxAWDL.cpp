@@ -2,7 +2,14 @@
 // Bounded single-peer AWDL radio diagnostics. Not a native AirDrop driver.
 #include "ItlIwx.hpp"
 #include <AWDL/AwdlFrame.h>
+#include <AWDL/AwdlData.h>
+#include <AWDL/AwdlEcho.h>
 #include <AWDL/AwdlRegulatory.h>
+#include <AWDL/AwdlRxClock.h>
+#include <AWDL/AwdlSyncAction.h>
+#include <AWDL/AwdlTxCompletion.h>
+#include <AWDL/AwdlAck.h>
+#include "../../AirportItlwm/AWDL/ItlAwdlNativeInterface.hpp"
 #include <kern/clock.h>
 
 static uint64_t awdlNowUs() {
@@ -36,7 +43,7 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             out->rx_dropped = s.rxDropped; out->rx_invalid = s.rxInvalid;
             out->device_id = self->pci.pa_tag->configRead16(kIOPCIConfigDeviceID);
             out->driver_flags = self->com.sc_flags; out->queued = s.count;
-            out->capabilities = 127; // Adds bounded linked-STA RX diagnostics. No AirDrop.
+            out->capabilities = 134217727; // Bit 26: timer-driven native synchronization; no AirDrop claim.
             memcpy(out->local_mac, ic->ic_myaddr, sizeof(out->local_mac));
             return kIOReturnSuccess;
         }
@@ -44,6 +51,25 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input));
         case ItlAwdlBeginLinked:
             return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input), true);
+        case ItlAwdlBeginData:
+            return self->awdlBegin(call->owner, static_cast<const ItlAwdlBeginRequest *>(call->input), false, true);
+        case ItlAwdlDataStatus: {
+            if (!call->output) return kIOReturnBadArgument;
+            memcpy(call->output, &s.dataStatus, sizeof(s.dataStatus));
+            static_cast<ItlAwdlDataStatusResponse *>(call->output)->version = ITL_AWDL_ABI_VERSION;
+            return kIOReturnSuccess;
+        }
+        case ItlAwdlReadData: {
+            if (!call->output) return kIOReturnBadArgument;
+            bzero(call->output, sizeof(ItlAwdlDataResponse));
+            if (!s.owner || s.owner != call->owner) return kIOReturnNotPermitted;
+            if (!s.dataStatus.queued) return kIOReturnNotReady;
+            memcpy(call->output, &s.dataRing[s.dataHead], sizeof(*s.dataRing));
+            bzero(&s.dataRing[s.dataHead], sizeof(*s.dataRing));
+            s.dataHead = (s.dataHead + 1) % ITL_AWDL_RING_COUNT;
+            --s.dataStatus.queued;
+            return kIOReturnSuccess;
+        }
         case ItlAwdlLinkedStatus: {
             if (!call->output) return kIOReturnBadArgument;
             auto out = static_cast<ItlAwdlLinkedStatusResponse *>(call->output);
@@ -60,6 +86,8 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
         }
         case ItlAwdlProbe:
             return self->awdlProbe(call->owner);
+        case ItlAwdlDataProbe:
+            return self->awdlDataProbe(call->owner, static_cast<const ItlAwdlDataProbeRequest *>(call->input));
         case ItlAwdlClock:
             if (!call->output) return kIOReturnBadArgument;
             if (!s.owner || s.owner != call->owner) return kIOReturnNotPermitted;
@@ -97,6 +125,8 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
             s.count = s.head = 0;
             s.rejected = false;
             if (s.ring) bzero(s.ring, sizeof(*s.ring) * (ITL_AWDL_RING_COUNT + 1));
+            if (s.dataRing) bzero(s.dataRing, sizeof(*s.dataRing) * ITL_AWDL_RING_COUNT);
+            s.dataHead = s.dataStatus.queued = s.dataStatus.enabled = 0;
             return kIOReturnSuccess;
         case ItlAwdlReadRejected:
             if (!call->output) return kIOReturnBadArgument;
@@ -124,12 +154,18 @@ IOReturn ItlIwx::awdlCommandGated(OSObject *, void *p, void *arg, void *, void *
     }
 }
 
-IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool linked) {
+IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool linked, bool data) {
     auto ic = &com.sc_ic;
     auto ifp = &ic->ic_ac.ac_if;
     if (!r || !owner || r->version != ITL_AWDL_ABI_VERSION || r->reserved ||
         r->padding[0] || r->padding[1] || r->dwell_ms < 100 || r->dwell_ms > ITL_AWDL_MAX_DWELL_MS ||
         !ItlAwdl::unicastMac(r->peer)) return kIOReturnBadArgument;
+    // A retained native object excludes all userspace radio diagnostics. Only
+    // its internal, receive-only qualification lease may own the monitor.
+    // It cannot use linked/data mode, TX probes or the diagnostic scheduler.
+    if ((awdlNativeInterfaceActive && owner != awdlNativeRadioOwner) ||
+        (awdlNativeRadioOwner && (owner != awdlNativeRadioOwner || linked || data)))
+        return kIOReturnBusy;
     uint32_t channel = r->channel;
     if (linked) {
         if (channel) return kIOReturnBadArgument;
@@ -152,6 +188,9 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
         return kIOReturnBusy;
     if (!awdl.ring) awdl.ring = static_cast<ItlAwdlTimedFrameResponse *>(IOMalloc(sizeof(*awdl.ring) * (ITL_AWDL_RING_COUNT + 1)));
     if (!awdl.ring) return kIOReturnNoMemory;
+    if (data && !awdl.dataRing)
+        awdl.dataRing = static_cast<ItlAwdlDataResponse *>(IOMalloc(sizeof(*awdl.dataRing) * ITL_AWDL_RING_COUNT));
+    if (data && !awdl.dataRing) return kIOReturnNoMemory;
     if (!awdl.timer) {
         awdl.timer = IOTimerEventSource::timerEventSource(this, awdlTimeout);
         if (!awdl.timer) return kIOReturnNoMemory;
@@ -160,9 +199,19 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
         }
     }
     bzero(awdl.ring, sizeof(*awdl.ring) * (ITL_AWDL_RING_COUNT + 1));
+    if (awdl.dataRing) bzero(awdl.dataRing, sizeof(*awdl.dataRing) * ITL_AWDL_RING_COUNT);
+    bzero(&awdl.dataStatus, sizeof(awdl.dataStatus));
+    awdl.dataStatus.enabled = data;
+    awdl.dataHead = 0;
     awdl.rejected = false;
     awdl.head = awdl.count = 0;
     awdl.rxTotal = awdl.rxAwdl = awdl.rxPeer = awdl.rxDropped = awdl.rxInvalid = 0;
+    awdlNativePeerProfile = {};
+    awdlNativePeerProfileSamples = 0;
+    awdlObservedReservation = {};
+    awdlNativeP2pSession = {};
+    awdlNativeFault = {};
+    awdlNativeP2pCommandVersion = awdlNativeP2pNotifVersion = 0;
     bzero(&awdl.tx, sizeof(awdl.tx));
     awdl.lastPeerRxUs = awdl.lastProbeUs = 0;
     awdl.lastPeerGp2 = 0;
@@ -241,7 +290,15 @@ IOReturn ItlIwx::awdlBegin(OSObject *owner, const ItlAwdlBeginRequest *r, bool l
 
 void ItlIwx::awdlStop(uint32_t reason, uint32_t error) {
     if (!awdlActive()) return;
+    __atomic_store_n(&awdlNativeTraceArmed,uint32_t(0),__ATOMIC_RELEASE);
+    if (awdlNativeRuntime && awdlNativeRadioOwner) {
+        auto native = OSDynamicCast(ItlAwdlNativeInterface, awdlNativeRadioOwner);
+        if (native) native->synchronizationRadioStopped();
+    }
     awdl.session = ItlAwdlStopping;
+    // This exclusive lease ends through iwx_stop/stop_device below, which
+    // removes the entire firmware context, including its session protection.
+    awdlNativeP2pSession.stop();
     ++awdl.epoch;
     awdl.run.active = 0;
     if (awdl.pendingWindow) ++awdl.run.cancelled;
@@ -309,10 +366,16 @@ void ItlIwx::awdlFinishLinkedStop() {
     awdl.session = ItlAwdlIdle;
 }
 
-IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
+IOReturn ItlIwx::awdlTransmitGuard(OSObject *owner, bool data, bool scheduled, bool native) {
+    if (native) {
+        if (!awdlNativeTxQualification || !awdlNativeRadioOwner || owner != awdlNativeRadioOwner ||
+            data || scheduled) return kIOReturnNotPermitted;
+        if (awdlNativeP2pQualification && !awdlNativeP2pSession.ready(com.sc_generation))
+            return kIOReturnNotReady;
+    } else if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     auto ic = &com.sc_ic;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
-    if (awdl.linked) return kIOReturnUnsupported;
+    if (awdl.linked || bool(awdl.dataStatus.enabled) != data) return kIOReturnUnsupported;
     if (!scheduled && (awdl.commandBusy || awdl.run.active)) return kIOReturnBusy;
     if (scheduled && awdl.mccNeedsRefresh) return kIOReturnNotReady;
     if (awdl.session != ItlAwdlListening || ic->ic_opmode != IEEE80211_M_MONITOR ||
@@ -320,7 +383,7 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
         !(ic->ic_ac.ac_if.if_flags & IFF_RUNNING)) return kIOReturnNotReady;
     auto channel = &ic->ic_channels[awdl.channel];
     uint64_t now = awdlNowUs();
-    if (!scheduled && (channel->ic_flags & IEEE80211_CHAN_PASSIVE) && awdl.mccQueries < 2 &&
+    if (!native && !scheduled && (channel->ic_flags & IEEE80211_CHAN_PASSIVE) && awdl.mccQueries < 2 &&
         (!awdl.lastMccQueryUs || now - awdl.lastMccQueryUs >= 1000000) &&
         (isset(com.sc_ucode_api, IWX_UCODE_TLV_API_WIFI_MCC_UPDATE) ||
          isset(com.sc_enabled_capa, IWX_UCODE_TLV_CAPA_LAR_MULTI_MCC))) {
@@ -329,9 +392,12 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
         awdl.lastMccQueryUs = now;
         ++awdl.mccQueries;
         int generation = com.sc_generation;
+        const uint32_t epoch = awdl.epoch;
+        awdl.commandBusy = true;
         awdl.mccError = iwx_send_update_mcc_cmd(&com, "ZZ");
+        awdl.commandBusy = false;
         // The synchronous firmware call can release the gate while waiting.
-        if (generation != com.sc_generation || awdl.session != ItlAwdlListening ||
+        if (generation != com.sc_generation || epoch != awdl.epoch || awdl.session != ItlAwdlListening ||
             awdl.owner != owner) return kIOReturnAborted;
         if (awdl.mccError) return kIOReturnIOError;
         now = awdlNowUs();
@@ -343,20 +409,49 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
     // only while the selected peer was heard on this channel within 500 ms.
     if (!awdl.lastPeerRxUs || now - awdl.lastPeerRxUs > 500000)
         return kIOReturnNotReady;
-    if (awdl.tx.submitted >= 8) return kIOReturnNoSpace;
+    if (awdl.tx.submitted >= (native ? (awdlNativeRuntime ? ItlAwdl::NativeRuntimeTxLimit : 4U) : 8U)) return kIOReturnNoSpace;
     if (awdl.tx.pending || (awdl.lastProbeUs && now - awdl.lastProbeUs < 100000))
         return kIOReturnBusy;
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
+    auto result = awdlTransmitGuard(owner, false, scheduled);
+    if (result) return result;
     uint8_t bytes[ItlAwdl::ProbeLength];
-    if (!ItlAwdl::buildProbe(bytes, sizeof(bytes), ic->ic_myaddr, awdl.peer,
-                            uint16_t(awdl.tx.submitted), uint32_t(now))) return kIOReturnBadArgument;
+    if (!ItlAwdl::buildProbe(bytes, sizeof(bytes), com.sc_ic.ic_myaddr, awdl.peer,
+                            uint16_t(awdl.tx.submitted), uint32_t(awdlNowUs()))) return kIOReturnBadArgument;
+    return awdlSubmitDiagnostic(bytes, sizeof(bytes));
+}
+
+IOReturn ItlIwx::awdlDataProbe(OSObject *owner, const ItlAwdlDataProbeRequest *request) {
+    if (!request || request->version != ITL_AWDL_ABI_VERSION || request->reserved ||
+        !request->token || !ItlAwdl::echoLength(request->length)) return kIOReturnBadArgument;
+    auto result = awdlTransmitGuard(owner, true, false);
+    if (result) return result;
+    uint8_t bytes[40 + ItlAwdl::DataMtu];
+    auto source = com.sc_ic.ic_myaddr;
+    const uint16_t sequence = uint16_t(awdl.tx.submitted);
+    if (!ItlAwdl::buildEchoIpv6(bytes + 40, ItlAwdl::DataMtu, source, awdl.peer,
+                               request->length, request->token, sequence)) return kIOReturnBadArgument;
+    // encodeData's payload source is exactly its destination, not a partially
+    // overlapping buffer. This keeps the kernel stack bounded to one MPDU.
+    auto length = ItlAwdl::encodeData(bytes, sizeof(bytes), source, awdl.peer,
+                                     sequence, sequence, bytes + 40, request->length);
+    if (!length) return kIOReturnBadArgument;
+    return awdlSubmitDiagnostic(bytes, length);
+}
+
+IOReturn ItlIwx::awdlSubmitDiagnostic(const uint8_t *bytes, size_t length) {
+    auto ic = &com.sc_ic;
     mbuf_t packet = nullptr;
     unsigned chunks = 1;
-    int error = mbuf_allocpacket(MBUF_DONTWAIT, sizeof(bytes), &chunks, &packet);
+    int error = mbuf_allocpacket(MBUF_DONTWAIT, length, &chunks, &packet);
     if (error || !packet) { awdl.tx.last_host_error = error ? error : ENOMEM; return kIOReturnNoMemory; }
-    error = mbuf_copyback(packet, 0, sizeof(bytes), bytes, MBUF_DONTWAIT);
+    error = mbuf_copyback(packet, 0, length, bytes, MBUF_DONTWAIT);
     if (error) { mbuf_freem(packet); awdl.tx.last_host_error = error; return kIOReturnNoMemory; }
-    mbuf_setlen(packet, sizeof(bytes));
-    mbuf_pkthdr_setlen(packet, sizeof(bytes));
+    mbuf_setlen(packet, length);
+    mbuf_pkthdr_setlen(packet, length);
     auto node = ieee80211_ref_node(ic->ic_bss);
     // iwx_tx consumes the mbuf on success AND failure; the node reference
     // transfers only on success and is then released by TX completion/stop.
@@ -368,8 +463,377 @@ IOReturn ItlIwx::awdlProbe(OSObject *owner, bool scheduled) {
     }
     ++awdl.tx.submitted;
     ++awdl.tx.pending;
-    awdl.lastProbeUs = now;
+    awdl.lastProbeUs = awdlNowUs();
     return kIOReturnSuccess;
+}
+
+IOReturn ItlIwx::awdlSubmitNativeSync(OSObject *owner, const uint8_t *bytes, size_t length, uint32_t gp2,
+    bool unicast) {
+    auto result = awdlTransmitGuard(owner, false, false, true);
+    if (result) return result;
+    ItlAwdl::ActionInfo action = {};
+    ItlAwdl::SyncAnnouncement sync = {};
+    if (!bytes || length > ItlAwdl::SyncActionMaxLength ||
+        ItlAwdl::parseAction(bytes,length,&action) != ItlAwdl::ParseResult::Valid ||
+        ItlAwdl::parseSchedule(bytes,length,&sync) != ItlAwdl::ScheduleResult::Valid ||
+        bytes[30] != (unicast ? 3 : 0) || !ItlAwdl::equalMac(bytes+10,awdlNativeAddress) ||
+        !ItlAwdl::equalMac(bytes+16,ItlAwdl::DefaultAwdlBssid) || action.phy_tx != gp2)
+        return kIOReturnBadArgument;
+    if (!ItlAwdl::syncQualificationDestination(bytes+4,awdl.peer,unicast)) return kIOReturnBadArgument;
+    ItlAwdlClockResponse clock = {};
+    result = awdlReadClock(&clock);
+    const auto age = ItlAwdl::clockDelta(clock.gp2_us,gp2);
+    if (result || (clock.flags&7)!=7 || age<0 || age>2000) return kIOReturnNotReady;
+    // Wait before giving a packet to firmware when a decoded reservation is
+    // still active. The caller will encode a fresh timestamp on its next try.
+    // This never disables or overrides the NIC's own carrier sensing.
+    if (awdlObservedReservation.remaining(clock.gp2_us,clock.host_end_us))
+        return kIOReturnNotReady;
+    ItlAwdl::PeerTxWindow peerWindow = {};
+    const int64_t localRemaining = int64_t(sync.down_counter_tu)*ItlAwdl::TuUs -
+        sync.tx_delay_us - age;
+    if (localRemaining <= 12000 || ItlAwdl::qualifyPeerWindow(awdl.schedule,
+        clock.gp2_us, clock.host_end_us, uint8_t(awdl.channel), true, &peerWindow) !=
+        ItlAwdl::PeerWindowResult::Ready) return kIOReturnNotReady;
+    // There are no sleeping firmware queries between this freshness check and
+    // submission. Completion samples a conservative delay bound, never an
+    // invented on-air timestamp. The monitor uses the native source MAC/rate.
+    awdlNativeTxGp2 = gp2;
+    const auto index = awdl.tx.submitted;
+    if (index >= nitems(awdlNativeTrace)) {
+        if (!awdlNativeRuntime || index >= ItlAwdl::NativeRuntimeTxLimit) return kIOReturnNoSpace;
+        // Preserve the first four detailed traces and all aggregate timing.
+        // Do not overwrite a cold first frame with a faster later sample.
+        awdlNativeTraceIndex = UINT32_MAX;
+        __atomic_store_n(&awdlNativeTraceArmed, uint32_t(0), __ATOMIC_RELEASE);
+        return awdlSubmitDiagnostic(bytes, length);
+    }
+    auto &trace = awdlNativeTrace[index];
+    bzero(&trace,sizeof(trace));
+    trace.frameGp2 = gp2; trace.freshGp2 = clock.gp2_us;
+    trace.packetLength = uint32_t(length);
+    trace.unicast = unicast;
+    trace.freshHostUs = clock.host_end_us;
+    trace.peerWindowElapsedUs = peerWindow.elapsedUs;
+    trace.peerWindowRemainingUs = peerWindow.remainingUs;
+    trace.peerWindowCounter = peerWindow.counter;
+    trace.peerWindowChannel = peerWindow.channel;
+    trace.localWindowRemainingUs = uint32_t(localRemaining);
+    awdlNativeTraceIndex = index; awdlNativeTraceCount = index + 1;
+    __atomic_store_n(&awdlNativeFilterAbsolute, uint64_t(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&awdlNativeTraceArmed, uint32_t(1), __ATOMIC_RELEASE);
+    result = awdlSubmitDiagnostic(bytes,length);
+    trace.returnHostUs = awdlNowUs();
+    trace.hostError = result;
+    return result;
+}
+
+void ItlIwx::awdlNativeTxDoorbell(uint32_t qid, uint32_t index, uint32_t nextSequence,
+    uint32_t offloadAssist, uint32_t headerLength) {
+    if (!awdlNativeTxQualification || !awdlNativeRadioOwner ||
+        awdlNativeTraceIndex >= awdlNativeTraceCount || awdlNativeTraceIndex >= nitems(awdlNativeTrace)) return;
+    auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+    trace.qid = qid; trace.index = index;
+    trace.nextSequence = nextSequence&0xfffU;
+    trace.commandOffloadAssist = offloadAssist;
+    trace.commandHeaderLength = headerLength;
+    // Host clock immediately before the existing MMIO write, not an on-air
+    // timestamp. Do not add another peripheral read/lock to the hot TX path.
+    trace.doorbellHostUs = awdlNowUs();
+}
+
+uint64_t ItlIwx::awdlObserveNativeTxDma() {
+    const auto now = awdlNowUs();
+#ifdef AIRPORT_VTD
+    static_assert(offsetof(iwx_rx_packet,data)==8 && sizeof(iwx_tx_resp)==44,
+        "read-only completion probe transport layout");
+    static_assert(offsetof(iwx_tx_resp,wireless_media_time)==8 &&
+        offsetof(iwx_tx_resp,byte_cnt)==30 && offsetof(iwx_tx_resp,tx_queue)==36 &&
+        offsetof(iwx_tx_resp,status)==40, "TX response v6 fields");
+    if (!awdlNativeRadioOwner || !awdlNativeTxQualification || !awdl.tx.pending ||
+        awdlNativeTraceIndex>=awdlNativeTraceCount || awdlNativeTraceIndex>=nitems(awdlNativeTrace) ||
+        !getMainWorkLoop()->inGate() || !com.rxq.stat) return now;
+    auto &trace=awdlNativeTrace[awdlNativeTraceIndex];
+    if (!trace.doorbellHostUs || trace.dmaReplyHostUs) return now;
+    // CSR reads do not require grabbing NIC access and this status register
+    // has no interrupt-acknowledgement side effect. Merely sample readiness;
+    // do not force the device awake or change its power policy.
+    const auto mac = IWX_READ(&com, IWX_CSR_GP_CNTRL);
+    ++trace.macReadSamples;
+    if (mac == 0xffffffffU || (mac & 0xfffffff0U) == 0xa5a5a5a0U)
+        ++trace.macInvalidSamples;
+    else {
+        if (mac & IWX_CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY) ++trace.macClockReadySamples;
+        if (mac & IWX_CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP) ++trace.macSleepingSamples;
+    }
+    trace.dmaProbeSupported=true;
+    ++trace.dmaProbeSamples;
+    // The published close index transfers these buffers to the host. Normal
+    // RX cannot reclaim them concurrently because both paths use this gate.
+    // Only inspect completed DMA memory: no NIC access, ring advancement,
+    // command completion, copying into live mbufs or interrupt acknowledgement.
+    OSSynchronizeIO();
+    const uint16_t hw=le16toh(*static_cast<volatile uint16_t *>(com.rxq.stat))&
+        (IWX_RX_MQ_RING_COUNT-1);
+    const uint32_t pending=(hw+IWX_RX_MQ_RING_COUNT-com.rxq.cur)&(IWX_RX_MQ_RING_COUNT-1);
+    if (pending>trace.dmaPendingMax) trace.dmaPendingMax=pending;
+    if (pending>16) ++trace.dmaScanTruncated;
+    for (uint32_t i=0;i<pending && i<16;++i) {
+        const auto index=(com.rxq.cur+i)&(IWX_RX_MQ_RING_COUNT-1);
+        auto map=com.rxq.data[index].map;
+        if (!map || !map->dma.arena || !map->dma.vaddr || map->dma.size<IWX_RBUF_SIZE) continue;
+        ItlAwdl::TxCompletionView reply={};
+        if (!ItlAwdl::findTxCompletion(static_cast<const uint8_t *>(map->dma.vaddr),IWX_RBUF_SIZE,
+                uint16_t(trace.qid),uint16_t(trace.nextSequence),uint16_t(trace.packetLength),&reply)) continue;
+        trace.dmaReplyHostUs=awdlNowUs();
+        trace.dmaStatus=reply.status; trace.dmaMediaUs=reply.mediaUs;
+        break;
+    }
+#endif
+    return now;
+}
+
+void ItlIwx::awdlPublishNativeTxTiming(IORegistryEntry *owner) {
+    if (!owner) return;
+    auto records = OSArray::withCapacity(nitems(awdlNativeTrace));
+    if (!records) return;
+    for (uint32_t i=0;i<awdlNativeTraceCount && i<nitems(awdlNativeTrace);++i) {
+        const auto &t = awdlNativeTrace[i];
+        auto entry = OSDictionary::withCapacity(20);
+        if (!entry) break;
+        auto put = [&](const char *key, uint64_t value) {
+            auto number = OSNumber::withNumber(value,64);
+            if (number) { entry->setObject(key,number); number->release(); }
+        };
+        put("frame",i); put("completed",t.completed); put("clock_valid",t.clockValid);
+        put("unicast",t.unicast);
+        put("mac_status_samples",t.macReadSamples);
+        put("mac_clock_ready_samples",t.macClockReadySamples);
+        put("mac_going_to_sleep_samples",t.macSleepingSamples);
+        put("mac_invalid_samples",t.macInvalidSamples);
+        put("pending_clock_reads",t.pendingClockReads);
+        put("pending_clock_max_read_us",t.pendingClockMaxReadUs);
+        if (t.firstPendingClockHostUs>=t.doorbellHostUs && t.doorbellHostUs) {
+            put("doorbell_to_first_pending_clock_host_us",t.firstPendingClockHostUs-t.doorbellHostUs);
+            put("doorbell_to_last_pending_clock_host_us",t.lastPendingClockHostUs-t.doorbellHostUs);
+        }
+        put("rx_before_ack_delivery_frames",t.beforeAckRx.frames);
+        put("rx_before_ack_delivery_bytes",t.beforeAckRx.bytes);
+        put("rx_before_ack_delivery_management",t.beforeAckRx.management);
+        put("rx_before_ack_delivery_control",t.beforeAckRx.control);
+        put("rx_before_ack_delivery_data",t.beforeAckRx.data);
+        put("rx_before_ack_delivery_max_nav_us",t.beforeAckRx.maxNavUs);
+        if (t.beforeAckRx.frames) {
+            put("rx_before_ack_delivery_first_from_frame_gp2_us",t.beforeAckRx.firstOffsetUs);
+            put("rx_before_ack_delivery_last_from_frame_gp2_us",t.beforeAckRx.lastOffsetUs);
+        }
+        put("ack_samples",t.ackCount);
+        if (t.ackCount) {
+            put("first_ack_from_frame_gp2_us",uint32_t(ItlAwdl::clockDelta(t.firstAckGp2,t.frameGp2)));
+            put("last_ack_from_frame_gp2_us",uint32_t(ItlAwdl::clockDelta(t.lastAckGp2,t.frameGp2)));
+            if (t.firstAckHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+                put("first_ack_delivered_after_doorbell_host_us",t.firstAckHostUs-t.doorbellHostUs);
+            const auto afterAck = ItlAwdl::clockDelta(t.completeGp2,t.firstAckGp2);
+            if (t.completed && t.clockValid && afterAck>=0)
+                put("first_ack_to_completion_gp2_us",uint32_t(afterAck));
+        }
+        put("qid",t.qid); put("index",t.index);
+        put("command_offload_assist",t.commandOffloadAssist);
+        put("command_header_length",t.commandHeaderLength);
+        put("host_error",t.hostError); put("firmware_status",t.firmwareStatus);
+        put("firmware_media_us",t.mediaUs); put("bluetooth_kills",t.btKill);
+        put("rts_failures",t.rtsFailures); put("frame_failures",t.frameFailures);
+        put("peer_window_elapsed_us",t.peerWindowElapsedUs);
+        put("peer_window_remaining_us",t.peerWindowRemainingUs);
+        put("peer_window_counter",t.peerWindowCounter);
+        put("peer_window_channel",t.peerWindowChannel);
+        put("local_window_remaining_us",t.localWindowRemainingUs);
+        put("dma_probe_supported",t.dmaProbeSupported); put("dma_probe_samples",t.dmaProbeSamples);
+        put("dma_pending_max",t.dmaPendingMax); put("dma_scan_truncated",t.dmaScanTruncated);
+        put("dma_reply_seen",t.dmaReplyHostUs!=0);
+        if (t.dmaReplyHostUs>=t.doorbellHostUs && t.doorbellHostUs) {
+            put("doorbell_to_dma_reply_host_us",t.dmaReplyHostUs-t.doorbellHostUs);
+            put("dma_reply_status",t.dmaStatus); put("dma_reply_media_us",t.dmaMediaUs);
+        }
+        const auto age = ItlAwdl::clockDelta(t.freshGp2,t.frameGp2);
+        if (age>=0 && age<=2000) put("frame_age_at_fresh_read_us",uint64_t(age));
+        if (t.doorbellHostUs>=t.freshHostUs && t.freshHostUs)
+            put("fresh_to_doorbell_host_us",t.doorbellHostUs-t.freshHostUs);
+        if (t.returnHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+            put("doorbell_to_return_host_us",t.returnHostUs-t.doorbellHostUs);
+        if (t.completed && t.clockValid) {
+            const auto elapsed = ItlAwdl::clockDelta(t.completeGp2,t.freshGp2);
+            if (elapsed>=0) put("fresh_to_complete_gp2_us",uint64_t(elapsed));
+            if (t.completeHostUs>=t.freshHostUs && t.freshHostUs)
+                put("fresh_to_complete_host_us",t.completeHostUs-t.freshHostUs);
+            if (t.completeHostUs>=t.doorbellHostUs && t.doorbellHostUs)
+                put("doorbell_to_complete_host_us",t.completeHostUs-t.doorbellHostUs);
+            if (t.completeHostUs>=t.batchHostUs && t.batchHostUs)
+                put("batch_to_complete_host_us",t.completeHostUs-t.batchHostUs);
+            uint64_t filterNs = 0;
+            absolutetime_to_nanoseconds(t.filterAbsolute,&filterNs);
+            const auto filterUs = filterNs/1000;
+            if (filterUs && filterUs>=t.doorbellHostUs && t.doorbellHostUs && t.batchHostUs>=filterUs) {
+                put("doorbell_to_batch_filter_host_us",filterUs-t.doorbellHostUs);
+                put("batch_filter_to_handler_host_us",t.batchHostUs-filterUs);
+            }
+        }
+        records->setObject(entry); entry->release();
+    }
+    // Only aggregate timing/counters, no packet bytes, identities or pointers.
+    // Published after the radio is stopped, outside the measured interval.
+    owner->setProperty("AX201NativeTxTiming",records);
+    records->release();
+}
+
+void ItlIwx::awdlPublishNativePeerProfile(IORegistryEntry *owner) {
+    if (!owner || !awdlNativePeerProfileSamples) return;
+    const auto &p = awdlNativePeerProfile;
+    auto entry = OSDictionary::withCapacity(25);
+    if (!entry) return;
+    auto put = [&](const char *key, uint32_t value) {
+        auto number = OSNumber::withNumber(value,32);
+        if (number) { entry->setObject(key,number); number->release(); }
+    };
+    put("samples",awdlNativePeerProfileSamples);
+    put("last_version",p.version); put("last_subtype",p.subtype);
+    put("next_channel",p.nextChannel); put("master_channel",p.masterChannel);
+    put("guard",p.guard); put("presence",p.presence); put("flags",p.flags);
+    put("period_tu",p.periodTu); put("action_period_tu",p.actionPeriodTu);
+    put("extension_tu",p.extensionTu); put("common_tu",p.commonTu);
+    put("remaining_tu",p.remainingTu); put("down_counter_tu",p.downCounterTu);
+    put("counter",p.counter); put("ap_alignment",p.alignment);
+    put("min_extension",p.extensions[0]); put("multicast_extension",p.extensions[1]);
+    put("unicast_extension",p.extensions[2]); put("action_extension",p.extensions[3]);
+    put("separate_channel_plan",p.separatePlan);
+    put("plan_encoding",p.plan.encoding); put("plan_step_aw",p.plan.step_aw);
+    auto plan = OSArray::withCapacity(ItlAwdl::ScheduleLength);
+    if (plan) {
+        for (unsigned i = 0; i < ItlAwdl::ScheduleLength; ++i) {
+            // Low byte is primary channel, high byte is operating class.
+            auto value = OSNumber::withNumber(uint32_t(p.plan.channels[i]) |
+                uint32_t(p.plan.operating_classes[i]) << 8,32);
+            if (value) { plan->setObject(value); value->release(); }
+        }
+        entry->setObject("channel_opclass",plan); plan->release();
+    }
+    owner->setProperty("AX201NativePeerProfile",entry); entry->release();
+}
+
+int ItlIwx::awdlStartNativeP2pSession() {
+    static_assert(ItlAwdl::P2pSessionProtection::MacId == 1 &&
+        ItlAwdl::P2pSessionProtection::Discovery == IWX_SESSION_PROTECT_CONF_P2P_DEVICE_DISCOV &&
+        ItlAwdl::P2pSessionProtection::ManagementTx == IWX_SESSION_PROTECT_CONF_P2P_GO_NEGOTIATION,
+        "P2P notification identity matches the firmware command");
+    auto in = reinterpret_cast<iwx_node *>(com.sc_ic.ic_bss);
+    if (!awdlNativeRadioOwner || !awdlNativeP2pQualification ||
+        !in || in->in_id != ItlAwdl::P2pSessionProtection::MacId || in->in_color ||
+        com.sc_ic.ic_opmode != IEEE80211_M_MONITOR || !awdlActive()) return EINVAL;
+    awdlNativeP2pCommandVersion = iwx_lookup_cmd_ver(&com,IWX_MAC_CONF_GROUP,IWX_SESSION_PROTECTION_CMD);
+    awdlNativeP2pNotifVersion = iwx_lookup_notif_ver(&com,IWX_MAC_CONF_GROUP,IWX_SESSION_PROTECTION_NOTIF);
+    if (!isset(com.sc_enabled_capa,IWX_UCODE_TLV_CAPA_SESSION_PROT_CMD) ||
+        awdlNativeP2pCommandVersion != 1 || awdlNativeP2pNotifVersion != 2) return ENOTSUP;
+    // Firmware can autonomously ACK on a P2P MAC even though this trial has
+    // no host TX. Require its current active, non-passive, non-DFS channel.
+    const auto ic = &com.sc_ic;
+    if (!awdl.channel || awdl.channel > IEEE80211_CHAN_MAX ||
+        !isset(ic->ic_chan_active,awdl.channel) || !ic->ic_channels[awdl.channel].ic_freq ||
+        (ic->ic_channels[awdl.channel].ic_flags & (IEEE80211_CHAN_PASSIVE | IEEE80211_CHAN_DFS)))
+        return EPERM;
+    const auto now=awdlNowUs();
+    // Intel maps a management-TX ROC to GO_NEGOTIATION protection, while a
+    // normal discovery ROC uses DEVICE_DISCOV. Keep the no-host-TX selector
+    // on its qualified configuration; do not accept caller-chosen profiles.
+    // The four-window observation is periodic discovery, not one management
+    // transaction. Use the fragmentable discovery profile for that lease.
+    // Keep the single-transaction timing selectors on ManagementTx so the
+    // expiry-assert comparison changes only the series selector's profile.
+    const auto config=awdlNativeTxQualification && !awdlNativeTxSeriesObservation ?
+        ItlAwdl::P2pSessionProtection::ManagementTx :
+        ItlAwdl::P2pSessionProtection::Discovery;
+    if (now>=awdl.deadlineUs || !awdlNativeP2pSession.arm(com.sc_generation,awdl.deadlineUs-now,config))
+        return ETIMEDOUT;
+    static_assert(sizeof(iwx_session_prot_cmd)==24 && sizeof(iwx_session_prot_notif)==16,
+        "P2P session-protection command v1 / notification v2");
+    iwx_session_prot_cmd command = {};
+    command.id_and_color=htole32(IWX_FW_CMD_ID_AND_COLOR(in->in_id,in->in_color));
+    command.action=htole32(IWX_FW_CTXT_ACTION_ADD);
+    command.conf_id=htole32(awdlNativeP2pSession.configuration);
+    command.duration_tu=htole32(awdlNativeP2pSession.durationTu);
+    const auto generation=com.sc_generation;
+    const auto error=iwx_send_cmd_pdu(&com,iwx_cmd_id(IWX_SESSION_PROTECTION_CMD,IWX_MAC_CONF_GROUP,0),
+        0,sizeof(command),&command);
+    if (error) awdlNativeP2pSession.fail();
+    if (generation!=com.sc_generation || !awdlActive()) return ECANCELED;
+    return error;
+}
+
+void ItlIwx::awdlRecordNativeRadioReset(NativeRadioResetSource source, uint32_t detail1, uint32_t detail2) {
+    if (!awdlNativeRadioOwner || !awdlActive()) return;
+    auto &f=awdlNativeFault;
+    ++f.events;
+    // Preserve the trigger before init_task turns it into a generic EIO.
+    // No MMIO, logging, allocation or additional firmware command here.
+    if (f.source) return;
+    f.source=source; f.detail1=detail1; f.detail2=detail2;
+    f.generation=com.sc_generation; f.flags=com.sc_flags;
+    f.submitted=awdl.tx.submitted; f.pending=awdl.tx.pending;
+    f.netState=com.sc_ic.ic_state; f.txTimer=com.sc_tx_timer;
+    f.queueId=com.first_data_qid;
+    if (f.queueId<nitems(com.txq)) {
+        const auto &q=com.txq[f.queueId];
+        f.queued=q.queued; f.queueHead=q.cur; f.queueTail=q.tail;
+    }
+    f.rxHead=com.rxq.cur;
+    const auto now=awdlNowUs();
+    f.remainingUs=now<awdl.deadlineUs ? awdl.deadlineUs-now : 0;
+}
+
+void ItlIwx::awdlPublishNativeRadioFault(IORegistryEntry *owner) {
+    if (!owner) return;
+    auto d=OSDictionary::withCapacity(20);
+    if (!d) return;
+    auto put=[](OSDictionary *dict,const char *key,uint64_t value) {
+        auto n=OSNumber::withNumber(value,64);
+        if (n) { dict->setObject(key,n); n->release(); }
+    };
+    const auto &f=awdlNativeFault;
+    put(d,"source",f.source); put(d,"events",f.events);
+    put(d,"detail1",f.detail1); put(d,"detail2",f.detail2);
+    put(d,"generation",f.generation); put(d,"flags",f.flags);
+    put(d,"submitted",f.submitted); put(d,"pending",f.pending);
+    put(d,"queue_id",f.queueId); put(d,"queued",f.queued);
+    put(d,"queue_head",f.queueHead); put(d,"queue_tail",f.queueTail);
+    put(d,"rx_head",f.rxHead); put(d,"net_state",f.netState);
+    put(d,"tx_timer",f.txTimer); put(d,"lease_remaining_us",f.remainingUs);
+    auto firmware=[&](const char *name,const NativeRadioFault::Firmware &fw) {
+        auto inner=OSDictionary::withCapacity(8);
+        if (!inner) return;
+        put(inner,"read_status",fw.readStatus); put(inner,"error_id",fw.errorId);
+        put(inner,"data1",fw.data1); put(inner,"data2",fw.data2); put(inner,"data3",fw.data3);
+        put(inner,"command",fw.command); put(inner,"last_command",fw.lastCommand); put(inner,"time",fw.time);
+        d->setObject(name,inner); inner->release();
+    };
+    firmware("lmac",f.lmac); firmware("umac",f.umac);
+    owner->setProperty("AX201NativeRadioFault",d); d->release();
+}
+
+void ItlIwx::awdlPublishNativeP2pSession(IORegistryEntry *owner) {
+    if (!owner || !awdlNativeP2pQualification) return;
+    auto d=OSDictionary::withCapacity(12);
+    if (!d) return;
+    auto put=[&](const char *key,uint32_t value) {
+        auto n=OSNumber::withNumber(value,32);
+        if (n) { d->setObject(key,n); n->release(); }
+    };
+    const auto &s=awdlNativeP2pSession;
+    put("configuration",s.configuration);
+    put("command_version",awdlNativeP2pCommandVersion); put("notification_version",awdlNativeP2pNotifVersion);
+    put("duration_tu",s.durationTu); put("start_notifications",s.starts); put("end_notifications",s.ends);
+    put("ignored_notifications",s.ignored); put("malformed_notifications",s.malformed);
+    put("failed",s.failed); put("active_after_stop",s.active); put("requested_after_stop",s.requested);
+    put("host_tx_submitted",awdl.tx.submitted); put("generation",s.generation);
+    owner->setProperty("AX201NativeP2pRadio",d); d->release();
 }
 
 IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
@@ -391,6 +855,18 @@ IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
     out->gp2_us = iwx_read_prph(&com, out->register_address);
     iwx_nic_unlock(&com);
     out->host_end_us = awdlNowUs();
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && awdl.tx.pending &&
+        awdlNativeTraceIndex<awdlNativeTraceCount && awdlNativeTraceIndex<nitems(awdlNativeTrace)) {
+        auto &trace=awdlNativeTrace[awdlNativeTraceIndex];
+        if (trace.doorbellHostUs && out->host_begin_us>=trace.doorbellHostUs) {
+            if (!trace.pendingClockReads) trace.firstPendingClockHostUs=out->host_begin_us;
+            trace.lastPendingClockHostUs=out->host_begin_us;
+            ++trace.pendingClockReads;
+            const auto duration=out->host_end_us-out->host_begin_us;
+            if (duration>trace.pendingClockMaxReadUs)
+                trace.pendingClockMaxReadUs=uint32_t(duration>UINT32_MAX ? UINT32_MAX : duration);
+        }
+    }
     out->rx_gp2_us = awdl.lastPeerGp2;
     out->rx_host_us = awdl.lastPeerRxUs;
     out->phy_command_version = iwx_lookup_cmd_ver(&com, IWX_LONG_GROUP, IWX_PHY_CONTEXT_CMD);
@@ -401,11 +877,12 @@ IOReturn ItlIwx::awdlReadClock(ItlAwdlClockResponse *out) {
 }
 
 IOReturn ItlIwx::awdlRun(OSObject *owner, const ItlAwdlRunRequest *request) {
+    if (awdlNativeRadioOwner) return kIOReturnUnsupported;
     if (!request || request->version != ITL_AWDL_ABI_VERSION || request->reserved[0] ||
         request->reserved[1] || request->mode < ItlAwdlTestWake || request->mode > ItlAwdlTestHop)
         return kIOReturnBadArgument;
     if (!awdl.owner || awdl.owner != owner) return kIOReturnNotPermitted;
-    if (awdl.linked) return kIOReturnUnsupported;
+    if (awdl.linked || awdl.dataStatus.enabled) return kIOReturnUnsupported;
     if (awdl.session != ItlAwdlListening) return kIOReturnNotReady;
     if (awdl.run.mode || awdl.commandBusy || awdl.tx.pending || awdl.tx.submitted) return kIOReturnBusy;
     if (request->mode == ItlAwdlTestProbe &&
@@ -698,6 +1175,8 @@ void ItlIwx::awdlDetach() {
         self->awdlStop(ItlAwdlDetached);
         self->awdl.ready = false;
         self->awdl.owner = nullptr;
+        self->awdlNativeRadioOwner = nullptr;
+        self->awdlNativeTxQualification = false;
         if (self->awdl.timer) {
             self->awdl.timer->cancelTimeout();
             self->getMainWorkLoop()->removeEventSource(self->awdl.timer);
@@ -713,16 +1192,51 @@ void ItlIwx::awdlDetach() {
             IOFree(self->awdl.ring, sizeof(*self->awdl.ring) * (ITL_AWDL_RING_COUNT + 1));
             self->awdl.ring = nullptr;
         }
+        if (self->awdl.dataRing) {
+            bzero(self->awdl.dataRing, sizeof(*self->awdl.dataRing) * ITL_AWDL_RING_COUNT);
+            IOFree(self->awdl.dataRing, sizeof(*self->awdl.dataRing) * ITL_AWDL_RING_COUNT);
+            self->awdl.dataRing = nullptr;
+        }
+        self->awdl.dataHead = self->awdl.dataStatus.queued = self->awdl.dataStatus.enabled = 0;
         return kIOReturnSuccess;
     }, this);
 }
 
-void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2, uint64_t tsf) {
+void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
+    uint64_t tsf, bool deaggregated, bool tsfOverloaded) {
     ++awdl.rxTotal;
     size_t length = mbuf_pkthdr_len(m);
     // RX MPDUs are contiguous here. Reject unexpectedly fragmented buffers.
-    if (mbuf_len(m) != length || length < 29) return;
+    if (mbuf_len(m) != length) return;
     auto bytes = static_cast<const uint8_t *>(mbuf_data(m));
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated && channel == awdl.channel)
+        awdlObservedReservation.observe(bytes,length,gp2,awdlNowUs(),awdlNativeAddress);
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated &&
+        channel == awdl.channel && awdlNativeTraceIndex < awdlNativeTraceCount &&
+        awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+        auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+        uint32_t delay = 0;
+        // The firmware may deliver the ACK MPDU after its TX notification in
+        // the same RX batch. Keep observing this lease after pending becomes
+        // zero; the hardware-clock bound rejects older/later transmissions.
+        if (trace.unicast && trace.doorbellHostUs && ItlAwdl::matchOwnedAck(bytes,length,
+            awdlNativeAddress,trace.frameGp2,gp2,&delay)) {
+            if (!trace.ackCount) { trace.firstAckGp2 = gp2; trace.firstAckHostUs = awdlNowUs(); }
+            trace.lastAckGp2 = gp2;
+            ++trace.ackCount;
+        }
+    }
+    if (awdlNativeRadioOwner && awdlNativeTxQualification && !deaggregated &&
+        channel == awdl.channel && awdlNativeTraceIndex < awdlNativeTraceCount &&
+        awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+        auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+        if (trace.doorbellHostUs && !trace.ackCount)
+            trace.beforeAckRx.observe(bytes,length,trace.frameGp2,gp2);
+    }
+    if (length < 24) return;
+    if (awdl.dataStatus.enabled && channel == awdl.channel && ItlAwdl::equalMac(bytes + 10, awdl.peer))
+        awdlObserveData(bytes, length, channel, rssi, gp2, deaggregated);
+    if (length < 29) return;
     if (bytes[0] != 0xd0 || bytes[24] != 127 || bytes[25] != 0 ||
         bytes[26] != 0x17 || bytes[27] != 0xf2 || bytes[28] != 8) return;
     ++awdl.rxAwdl;
@@ -742,6 +1256,8 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
     }
     awdl.lastPeerRxUs = awdlNowUs();
     awdl.lastPeerGp2 = gp2;
+    if (awdlNativeRadioOwner && ItlAwdl::syncWireProfile(bytes,length,&awdlNativePeerProfile))
+        ++awdlNativePeerProfileSamples;
     ItlAwdl::SyncAnnouncement announcement = {};
     ItlAwdl::ScheduleSample sample = {};
     if (ItlAwdl::parseSchedule(bytes, length, &announcement) == ItlAwdl::ScheduleResult::Valid &&
@@ -749,14 +1265,51 @@ void ItlIwx::awdlObserve(mbuf_t m, uint32_t channel, int32_t rssi, uint32_t gp2,
         (sample.reset || sample.outlier) && awdl.run.mode != ItlAwdlTestHop && awdl.pendingWindow) {
         awdl.pendingWindow = false; ++awdl.run.cancelled;
     }
+    // Native management RX is independent of the finite diagnostic ring.
+    // The retained runtime owner verifies firmware generation and enable state.
+    if (awdlNativeRuntime && awdlNativeRadioOwner && !deaggregated) {
+        auto native = OSDynamicCast(ItlAwdlNativeInterface, awdlNativeRadioOwner);
+        if (native) native->synchronizationReceive(bytes, length, channel, rssi, gp2);
+        if (!awdlActive()) return;
+    }
     if (awdl.count == ITL_AWDL_RING_COUNT) { ++awdl.rxDropped; return; }
     auto &record = awdl.ring[(awdl.head + awdl.count) % ITL_AWDL_RING_COUNT];
     bzero(&record, sizeof(record));
-    record.clock_flags = 1; record.gp2_us = gp2; record.tsf_us = tsf;
+    const auto clocks = ItlAwdl::receiveClockSample(gp2, tsf, tsfOverloaded);
+    record.clock_flags = clocks.flags;
+    record.gp2_us = clocks.gp2Us;
+    record.tsf_us = clocks.tsfUs;
     auto &frame = record.frame;
     frame.version = ITL_AWDL_ABI_VERSION; frame.length = uint32_t(length);
     frame.channel = channel; frame.rssi_dbm = rssi;
     frame.timestamp_us = awdl.lastPeerRxUs;
     memcpy(frame.frame, bytes, length);
     ++awdl.count;
+}
+
+void ItlIwx::awdlObserveData(const uint8_t *bytes, size_t length, uint32_t channel,
+                            int32_t rssi, uint32_t gp2, bool deaggregated) {
+    ItlAwdl::DataBatch batch = {};
+    auto result = ItlAwdl::decodeData(bytes, length, deaggregated, &batch);
+    auto &status = awdl.dataStatus;
+    if (result == ItlAwdl::DataResult::NotAwdl) return;
+    if (result == ItlAwdl::DataResult::Unsupported) { ++status.unsupported; return; }
+    if (result != ItlAwdl::DataResult::Valid) { ++status.malformed; return; }
+    // Reserve space for the whole aggregate; never expose partial delivery.
+    if (batch.count > ITL_AWDL_RING_COUNT - status.queued) {
+        status.dropped += uint32_t(batch.count); return;
+    }
+    const uint64_t now = awdlNowUs();
+    static_assert(ItlAwdl::DataMtu == ITL_AWDL_DATA_MTU, "RX MTU");
+    for (size_t i = 0; i < batch.count; ++i) {
+        const auto &packet = batch.packets[i];
+        auto &record = awdl.dataRing[(awdl.dataHead + status.queued) % ITL_AWDL_RING_COUNT];
+        bzero(&record, sizeof(record));
+        record.version = ITL_AWDL_ABI_VERSION;
+        record.length = uint32_t(packet.length); record.channel = channel; record.rssi_dbm = rssi;
+        record.timestamp_us = now; record.gp2_us = gp2; record.sequence = packet.sequence;
+        memcpy(record.source, packet.source, 6); memcpy(record.destination, packet.destination, 6);
+        memcpy(record.ipv6, packet.ipv6, packet.length);
+        ++status.queued; ++status.accepted;
+    }
 }

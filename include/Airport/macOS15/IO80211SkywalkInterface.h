@@ -90,7 +90,9 @@ public:
     virtual void * createPeerManager();
 private: virtual void _abi_0b10() __asm__("__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"); public:
     virtual void postMessage(unsigned int, void*, unsigned long, bool);
-    virtual IOReturn reportDataPathEvents(unsigned int, void*, unsigned long, bool);
+    // 24H32 returns a boolean gate-failure flag (test eax; setne al), not
+    // IOReturn or the peer manager's handled result. False is dispatch success.
+    virtual bool reportDataPathEvents(unsigned int, void*, unsigned long, bool);
     virtual IOReturn recordOutputPackets(TxSubmissionDequeueStats*, TxSubmissionDequeueStats*);
     virtual IOReturn recordOutputPacket(apple80211_wme_ac, int, int);
     virtual void logTxPacket(IO80211NetworkPacket*, PacketSkywalkScratch*, apple80211_wme_ac, bool);
@@ -149,7 +151,9 @@ private: virtual void _abi_0cd0() __asm__("__ZN23IO80211SkywalkInterface8findPee
     virtual void * getWorkerMatchingDict(OSString*);
     virtual bool init(IOService*, ether_addr*);
     virtual bool isInterfaceEnabled();
-    virtual ether_addr * getSelfMacAddr();
+    // 24H32 returns the six address bytes in RAX, not a pointer. Native callers
+    // copy its low 32/16 bits into ether_addr before passing an address onward.
+    virtual ether_addr getSelfMacAddr();
     virtual IOReturn setMacAddress(ether_addr&) = 0;
     virtual void * getPacketPool(OSString*);
     virtual CCLogStream * getLogger() const;
@@ -196,6 +200,39 @@ private: virtual void _abi_0e48() __asm__("__ZN23IO80211SkywalkInterface20getNCl
 private: virtual void _abi_0e50() __asm__("__ZN23IO80211SkywalkInterface18getLastTxTimeStampERy"); public:
 private: virtual void _abi_0e58() __asm__("__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"); public:
 private: uint8_t _layout[0x118 - sizeof(IOSkywalkEthernetInterface)];
+protected:
+    // Only these start/stop ownership fields have been audited for 24H32.
+    // No interface/firmware state is inferred from the opaque bytes.
+    struct NativeStartState {
+        uint8_t opaque00[0x28];
+        OSObject *peerManager;
+        IO80211Controller *controller;
+        OSObject *workQueue;
+        uint8_t opaque40[0x10];
+        OSObject *macAgent;
+        uint8_t opaque58[0x20];
+        OSObject *logStream;
+        CCPipe *logPipe;
+    };
+    static_assert(__offsetof(NativeStartState, peerManager) == 0x28, "native peer owner");
+    static_assert(__offsetof(NativeStartState, controller) == 0x30, "native controller owner");
+    static_assert(__offsetof(NativeStartState, macAgent) == 0x50, "native MAC owner");
+    static_assert(__offsetof(NativeStartState, logStream) == 0x78, "native log owner");
+    static_assert(__offsetof(NativeStartState, logPipe) == 0x80, "native pipe owner");
+    NativeStartState *nativeStartState() const {
+        NativeStartState *storage = nullptr;
+        memcpy(&storage, _layout, sizeof(storage));
+        return storage;
+    }
+    // 24H32: the sole field at 0x110 is the native expansion pointer.
+    // free() dereferences it before its null check. A subclass whose init()
+    // failed must select the lower base's free() when this storage is absent.
+    bool hasNativeSkywalkStorage() const {
+        void *storage = nullptr;
+        static_assert(sizeof(_layout) == sizeof(storage), "Sequoia expansion pointer");
+        memcpy(&storage, _layout, sizeof(storage));
+        return storage != nullptr;
+    }
 public:
     OSString *setInterfaceRole(unsigned int);
     void *setInterfaceId(unsigned int);

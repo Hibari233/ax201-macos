@@ -2,6 +2,110 @@
 // Compile-only fixture. Never linked into or installed as a driver.
 #include <Airport/Apple80211.h>
 #include <Airport/macOS15/IO80211AWDLProtocol.h>
+#include <Airport/macOS15/IO80211NetworkPacket.h>
+#include <Airport/macOS15/IOSkywalkTxSubmissionQueue.h>
+#include <Airport/macOS15/IOSkywalkRxCompletionQueue.h>
+#include <Airport/macOS15/IO80211ManagementBuffer.h>
+#include <AWDL/AwdlNativeEvents.h>
+#include <AWDL/AwdlSyncAction.h>
+
+// Compile the portable encoder using kernel flags as well as the host tests.
+size_t sequoiaSyncActionCompileFixture(const ItlAwdl::SyncActionContext &context,
+    const ItlAwdl::SyncActionParameters &parameters, const ItlAwdl::ActionTemplate &extra,
+    const ItlAwdl::NativeBssidConfiguration &network,
+    uint8_t *output, size_t capacity) {
+    return ItlAwdl::buildSyncAction(context, parameters, extra, network, output, capacity);
+}
+
+// Force compiler vtables for every packet base, including the pool release
+// override. Compare these object-file relocations to the target's native ABI.
+#define ABI_FIXTURE(name, base) \
+    class name : public base { OSDeclareDefaultStructors(name) }; \
+    OSDefineMetaClassAndStructors(name, base)
+ABI_FIXTURE(SequoiaPacketPoolAbiTest, IOSkywalkPacketBufferPool)
+ABI_FIXTURE(SequoiaPacketAbiTest, IOSkywalkPacket)
+ABI_FIXTURE(SequoiaNetworkPacketAbiTest, IOSkywalkNetworkPacket)
+ABI_FIXTURE(SequoiaWifiPacketAbiTest, IO80211NetworkPacket)
+ABI_FIXTURE(SequoiaTxQueueAbiTest, IOSkywalkTxSubmissionQueue)
+ABI_FIXTURE(SequoiaRxQueueAbiTest, IOSkywalkRxCompletionQueue)
+ABI_FIXTURE(SequoiaManagementPoolAbiTest, IO80211BufferPool)
+ABI_FIXTURE(SequoiaManagementBufferAbiTest, IO80211Buffer)
+#undef ABI_FIXTURE
+static_assert(sizeof(SequoiaPacketPoolAbiTest) == 0xb8, "Pool fixture extent");
+static_assert(sizeof(SequoiaPacketAbiTest) == 0x70, "Packet fixture extent");
+static_assert(sizeof(SequoiaNetworkPacketAbiTest) == 0x78, "Network packet fixture extent");
+static_assert(sizeof(SequoiaWifiPacketAbiTest) == 0x78, "Wi-Fi packet fixture extent");
+static_assert(sizeof(SequoiaTxQueueAbiTest) == 0x168, "TX queue fixture extent");
+static_assert(sizeof(SequoiaRxQueueAbiTest) == 0x138, "RX queue fixture extent");
+static_assert(sizeof(SequoiaManagementPoolAbiTest) == 0x10, "Management pool fixture extent");
+static_assert(sizeof(SequoiaManagementBufferAbiTest) == 0x18, "Management buffer fixture extent");
+static_assert(__is_same(decltype(static_cast<IOSkywalkPacketQueue *>(nullptr)->initialize(nullptr)),
+                        IOReturn), "Queue initialization returns IOReturn");
+static_assert(__is_same(decltype(static_cast<IOSkywalkRxCompletionQueue *>(nullptr)->enqueuePackets(nullptr, 0, 0)),
+                        IOReturn), "RX enqueue returns IOReturn, not an accepted count");
+static_assert(__is_same(decltype(static_cast<IOSkywalkPacketBufferPool *>(nullptr)->allocatePacket(nullptr, 0)),
+                        IOReturn), "Pool allocation returns IOReturn");
+static_assert(__is_same(decltype(static_cast<IOSkywalkPacket *>(nullptr)->prepare(nullptr, 0, 0)),
+                        IOReturn), "Packet preparation returns IOReturn");
+
+// 24H32 ioctl length checks and native caller/backend accesses were audited
+// independently. These would catch the old 20-byte/8-byte legacy declarations.
+static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "Sequoia sync params length");
+static_assert(sizeof(apple80211_awdl_bssid) == 16, "Sequoia BSSID pair length");
+static_assert(sizeof(apple80211_awdl_election_id) == 8, "Sequoia election-ID length");
+static_assert(sizeof(apple80211_awdl_election_metric) == 12, "Sequoia election-metric length");
+static_assert(__offsetof(apple80211_awdl_election_metric, override_metric) == 8, "Sequoia metric override");
+static_assert(sizeof(apple80211_awdl_min_rate) == 8, "Sequoia minimum-rate length");
+static_assert(__offsetof(apple80211_awdl_min_rate, min_rate) == 4, "Sequoia minimum-rate byte");
+static_assert(sizeof(apple80211_awdl_master_channel) == 8, "Sequoia master-channel length");
+static_assert(__offsetof(apple80211_awdl_master_channel, master_channel) == 4, "Sequoia master-channel offset");
+static_assert(sizeof(apple80211_awdl_election_rssi_thresholds) == 20, "Sequoia election-RSSI length");
+static_assert(__offsetof(apple80211_awdl_election_rssi_thresholds, unk4) == 16, "Sequoia fourth RSSI threshold");
+static_assert(__offsetof(apple80211_awdl_sync_state, master) == 8, "Sequoia sync master");
+static_assert(__offsetof(apple80211_awdl_sync_state, operation_mode) == 16, "Sequoia sync operation mode");
+static_assert(__offsetof(apple80211_awdl_sync_state, additional_role_flags) == 20, "Sequoia sync role flags");
+static_assert(sizeof(apple80211_awdl_presence_mode) == 8, "Sequoia presence extent");
+static_assert(__offsetof(apple80211_awdl_presence_mode, mode) == 4, "Sequoia presence offset");
+static_assert(sizeof(apple80211_awdl_extension_state_machine_parameter) == 20, "Sequoia extension extent");
+static_assert(__offsetof(apple80211_awdl_extension_state_machine_parameter, unk4) == 16, "Sequoia minimum extension");
+static_assert(sizeof(apple80211_awdl_sync_channel_sequence) == 400, "Sequoia channel-sequence extent");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, channels) == 12, "Sequoia sequence record start");
+static_assert(sizeof(apple80211_awdl_sync_channel_sequence::channels) == 384, "Sequoia 32 channel records");
+static_assert(__offsetof(apple80211_awdl_sync_channel_sequence, opaque_tail) == 396, "Sequoia sequence tail");
+static_assert(__offsetof(apple80211_awdl_election_id, election_id) == 4, "Sequoia election-ID offset");
+static_assert(__offsetof(apple80211_awdl_bssid, bssid) == 4, "Sequoia AWDL BSSID offset");
+static_assert(__offsetof(apple80211_awdl_bssid, unk_mac) == 10, "Sequoia companion BSSID offset");
+static_assert(__offsetof(apple80211_awdl_sync_params, unknown_14) == 0x14, "Sequoia sync params tail");
+static_assert(sizeof(apple80211_awdl_sync_state) == 0x18, "Sequoia sync state length");
+static_assert(sizeof(apple80211_awdl_sync_enabled) == 12, "Sequoia sync enable extent");
+static_assert(__offsetof(apple80211_awdl_sync_enabled, enabled) == 8, "Sequoia sync enabled field");
+static_assert(sizeof(apple80211_awdl_sync_frame_template) == 16, "Sequoia frame template extent");
+static_assert(__offsetof(apple80211_awdl_sync_frame_template, payload) == 8, "Sequoia template pointer");
+static_assert(__is_same(decltype(static_cast<IO80211SkywalkInterface *>(nullptr)->getSelfMacAddr()),
+                        ether_addr), "Sequoia self MAC returns by value");
+static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullptr)->registerEthernetInterface(
+                        nullptr, nullptr, 0, nullptr, nullptr, 0)), IOReturn),
+                        "Sequoia registration returns zero-success IOReturn, not bool");
+
+static_assert(__is_same(decltype(static_cast<IOSkywalkNetworkInterface *>(nullptr)->deferBSDAttach(true)),
+                        IOReturn), "Sequoia deferred BSD attach returns IOReturn");
+static_assert(__is_same(decltype(static_cast<IOSkywalkEthernetInterface *>(nullptr)->deregisterEthernetInterface(0)),
+                        IOReturn), "Sequoia deregistration returns IOReturn");
+
+static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)->attachToBpf()),
+                        bool), "Sequoia BPF attach returns bool");
+static_assert(__is_same(decltype(static_cast<IO80211VirtualInterface *>(nullptr)->configureIfnet()),
+                        void), "Sequoia ifnet configuration return is not a readiness result");
+static_assert(__is_same(decltype(static_cast<IO80211SkywalkInterface *>(nullptr)->reportDataPathEvents(
+                        0, nullptr, 0, false)), bool), "24H32 event dispatch returns gate-failure bool");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START == ItlAwdl::NativeAvailabilityWindowStartEvent,
+              "24H32 AW start event is 41, not extension-start 42");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSION_START == ItlAwdl::NativeAvailabilityWindowExtensionStartEvent,
+              "24H32 AW extension event");
+static_assert(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSIONS_END == ItlAwdl::NativeAvailabilityWindowEndEvent,
+              "24H32 AW end event");
+static_assert(APPLE80211_M_AWDL_SYNC_STATE_CHANGED == ItlAwdl::NativeSyncStateChangedEvent,
+              "24H32 sync state event");
 
 class SequoiaAwdlAbiTest : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(SequoiaAwdlAbiTest)

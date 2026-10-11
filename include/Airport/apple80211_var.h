@@ -649,7 +649,14 @@ struct apple80211_status_msg_hdr
 #define APPLE80211_M_DEAUTH_RECEIVED         32
 #define APPLE80211_M_RSSI_CHANGED            39
 #define APPLE80211_M_PEER_STATE              40
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_15_2
+// Modified 2026-10-10: 24H32's producer, event-name table and peer-manager
+// dispatcher agree on 41. Event 42 is an extension, not a new AW boundary.
+#define APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START 41
+#define APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSION_START 42
+#else
 #define APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START 42
+#endif
 #define APPLE80211_M_AWDL_AVAILABILITY_WINDOW_EXTENSIONS_END    43
 #define APPLE80211_M_AWDL_SYNC_STATE_CHANGED 46
 #define APPLE80211_M_AWDL_PEER_PRESENCE      47

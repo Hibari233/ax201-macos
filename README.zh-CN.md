@@ -3,6 +3,7 @@
 基于 [laobamac/itlwm](https://github.com/laobamac/itlwm) 和
 [OpenIntelWireless/itlwm](https://github.com/OpenIntelWireless/itlwm) 的 AX201 驱动开发项目。
 保留上游历史，逐步完善原生 Wi-Fi、WPA3 和 AirDrop。
+当前优先开发 AirDrop。
 
 **目前是实验开发阶段，尚不支持 WPA3-only 和原生 AirDrop。**
 接收到 AWDL 帧、编译通过或出现接口，都不能算 AirDrop 已经可用。
@@ -21,8 +22,13 @@ Tahoe 和其他网卡的源码保留，暂不承诺兼容性。
 | WPA2/WPA3 混合模式、可选 PMF | 上游声明支持，本项目尚未独立验证 |
 | WPA3-SAE-only、强制 PMF | 尚未支持 |
 | AWDL 帧解析和时序 | 已有离线测试和独占监听记录，仅用于诊断 |
+| AWDL IPv6 数据接收 | Revision 10 已在信道 149 实测；108 个 1280 字节包通过传输层校验，仅限诊断接收 |
+| AWDL 固定数据发送 | Revision 11 的 64/1280/1500 字节测试包已得到固件完成通知；有效回包为零，尚未实现双向 IPv6 |
 | Wi-Fi 连接时的 AWDL 接收 | 诊断退出和恢复已测试，同信道对端接收尚未证实 |
-| 原生 awdl0、IPv6 数据互通、AirDrop 传文件 | 尚未实现 |
+| 原生 AWDL 对象生命周期 | Revision 14 验证了跨客户端保留同一原生对象及最终释放；已拦截不安全的重复创建 |
+| 原生数据队列 | Revision 18 已实测 BSD 客户端接入和真实 netif 队列初始化；无线启动仍被拒绝，尚无收发回调 |
+| 原生 awdl0 | 已实测显式创建诊断接口；无线后端未启用，尚不能发现对端或传输 |
+| 双向 IPv6 互通、AirDrop 传文件 | 尚未实现 |
 | 睡眠唤醒、漫游、持续吞吐 | 尚未达到发布验收标准 |
 
 ## 本地构建

@@ -40,6 +40,7 @@ def report(path):
     return {'frames': len(frames),
             'parse_results': dict(Counter(str(r.get('schedule_parse')) for r in frames)),
             'hardware_timestamp_frames': sum(bool(r.get('clock_flags', 0) & 1) for r in frames),
+            'valid_tsf_frames': sum(bool(r.get('clock_flags', 0) & 2) for r in frames),
             'schedule_resets': sum(bool(r.get('schedule_reset')) for r in frames),
             'schedule_outliers': sum(bool(r.get('schedule_outlier')) for r in frames),
             'longest_coherent_run': max((r.get('coherent_samples', 0) for r in frames), default=0),

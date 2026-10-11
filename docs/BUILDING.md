@@ -32,8 +32,10 @@ Each test executable has a 60-second timeout, configurable with
 - `build/awdl/AirportItlwm.kext`: Wi-Fi plus the experimental diagnostic interface.
 - `build/<variant>/build-manifest.json`: source commit, dirty state, SDK, compiler,
   variant and binary SHA-256. A dirty build is not an exact committed source build.
-- `build/native-abi/obj/tests/awdl/native_abi.o`: compile-only native interface fixture.
-- `build/tools/awdlctl`: x86_64 command-line client; compiling it does not run it.
+- `build/native-abi/obj/tests/awdl/native_abi.o`: compile-only native interface,
+  packet/pool and queue fixtures.
+- `build/tools/awdlctl`, `awdl_data_rx`, `awdl_native_init`, `awdl_native_packets`,
+  and `awdl_native_queues`: x86_64 diagnostic clients; compiling does not run them.
 
 The build reads source membership and module version from the Sequoia Xcode
 target. Experimental sources are added only for the AWDL variant. Firmware input

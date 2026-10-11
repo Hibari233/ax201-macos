@@ -6,6 +6,9 @@
 #define ITL_SEQUOIA_IO80211VIRTUALINTERFACE_H
 #include "IO80211SkywalkInterface.h"
 
+class IO80211Buffer;
+class IO80211BufferPool;
+
 class IO80211VirtualInterface : public IO80211SkywalkInterface {
     OSDeclareAbstractStructors(IO80211VirtualInterface)
 public:
@@ -146,9 +149,9 @@ public:
     // vptr + 0xed0: IO80211VirtualInterface::configureAQMOutput()
     private: virtual void _native_0ed0() __asm__("__ZN23IO80211VirtualInterface18configureAQMOutputEv"); public:
     // vptr + 0xed8: IO80211VirtualInterface::attachToBpf()
-    private: virtual void _native_0ed8() __asm__("__ZN23IO80211VirtualInterface11attachToBpfEv"); public:
+    virtual bool attachToBpf();
     // vptr + 0xee0: IO80211VirtualInterface::configureIfnet()
-    private: virtual void _native_0ee0() __asm__("__ZN23IO80211VirtualInterface14configureIfnetEv"); public:
+    virtual void configureIfnet();
     // vptr + 0xee8: IO80211VirtualInterface::reset()
     private: virtual void _native_0ee8() __asm__("__ZN23IO80211VirtualInterface5resetEv"); public:
     // vptr + 0xef0: IO80211VirtualInterface::dupAndTransmitMcastPacket(IO80211NetworkPacket*, unsigned char*, unsigned char*)
@@ -195,6 +198,21 @@ public:
     private: virtual void _RESERVEDIO80211VirtualInterface14(); public:
     // vptr + 0xf98: IO80211VirtualInterface::_RESERVEDIO80211VirtualInterface15()
     private: virtual void _RESERVEDIO80211VirtualInterface15(); public:
+public:
+    // Nonvirtual native helper, independently inspected in 24H32. It frees
+    // the BPF list/lock acquired by init(); free() alone does not free them.
+    void freeBpfResources();
+    // Borrowed controller pool, not a new pool and not a Skywalk data pool.
+    IO80211BufferPool *getMgmtFramePool();
+    // For type 12, native peer input consumes or queues the lease. All paths
+    // return it natively; the caller must neither release nor return it again.
+    void bpfTapInput(IO80211Buffer *, unsigned int, void *, unsigned long);
+protected:
+    bool hasNativeVirtualStorage() const {
+        void *storage = nullptr;
+        memcpy(&storage, _virtualLayout, sizeof(storage));
+        return storage != nullptr;
+    }
 private:
     uint8_t _virtualLayout[8]; // Expansion pointer at 0x118.
 };

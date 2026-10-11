@@ -160,8 +160,8 @@ bool ItlIwx::attach(IOPCIDevice *device)
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     awdl.ready = true;
     getController()->setProperty("ItlAwdlExperimentalABI", ITL_AWDL_ABI_VERSION, 32);
-    getController()->setProperty("ItlAwdlExperimentalRevision", 9, 32);
-    getController()->setProperty("ItlAwdlExperimentalBuild", 2, 32);
+    getController()->setProperty("ItlAwdlExperimentalRevision", 10, 32);
+    getController()->setProperty("ItlAwdlExperimentalBuild", 1, 32);
 #endif
     return true;
 }
@@ -5940,7 +5940,9 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
                              desc->v3.tsf_on_air_rise : desc->v1.tsf_on_air_rise);
         // Observe without changing ownership or length. STA firmware does
         // not append FCS. Normal decrypt/reorder/net80211 processing follows.
-        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf);
+        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf,
+                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU),
+                    bool(le16toh(desc->phy_info) & IWX_RX_MPDU_PHY_TSF_OVERLOAD));
     }
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
         uint32_t channel = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ? desc->v3.channel : desc->v1.channel;
@@ -5956,7 +5958,9 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
                               desc->v3.gp2_on_air_rise : desc->v1.gp2_on_air_rise);
         uint64_t tsf = le64toh(sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
                              desc->v3.tsf_on_air_rise : desc->v1.tsf_on_air_rise);
-        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf);
+        awdlObserve(m, channel, iwx_rxmq_get_signal_strength(sc, desc), gp2, tsf,
+                    bool(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_AMSDU),
+                    bool(le16toh(desc->phy_info) & IWX_RX_MPDU_PHY_TSF_OVERLOAD));
         mbuf_freem(m);
         return;
     }
@@ -6055,11 +6059,40 @@ iwx_rx_tx_cmd_single(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR &&
         tx_resp->tx_queue == sc->first_data_qid && awdl.tx.pending) {
+        // Linux v6.12 mvm/tx.c accepts SUCCESS and DIRECT_DONE. Restrict this
+        // additional completion case to our explicit native-template trial.
+        if (awdlNativeRadioOwner && awdlNativeTxQualification && status == IWX_TX_STATUS_DIRECT_DONE)
+            txfail = 0;
         ++awdl.tx.completed;
         --awdl.tx.pending;
         if (txfail) ++awdl.tx.failed;
         else ++awdl.tx.succeeded;
         awdl.tx.last_firmware_status = status;
+        if (awdlNativeRadioOwner && awdlNativeTxQualification) {
+            awdlNativeLastRate = le32toh(tx_resp->initial_rate);
+            ItlAwdlClockResponse clock = {};
+            auto error = awdlReadClock(&clock);
+            const auto delay = ItlAwdl::clockDelta(clock.gp2_us,awdlNativeTxGp2);
+            if (awdlNativeTraceIndex < awdlNativeTraceCount && awdlNativeTraceIndex < nitems(awdlNativeTrace)) {
+                auto &trace = awdlNativeTrace[awdlNativeTraceIndex];
+                trace.completed = true; trace.completeHostUs = clock.host_end_us;
+                trace.clockValid = !error && (clock.flags&1);
+                trace.completeGp2 = clock.gp2_us;
+                trace.batchHostUs = awdlNativeBatchHostUs;
+                trace.filterAbsolute = awdlNativeBatchFilterAbsolute;
+                trace.mediaUs = le16toh(tx_resp->wireless_media_time);
+                trace.btKill = tx_resp->bt_kill_count;
+                trace.rtsFailures = tx_resp->failure_rts;
+                trace.frameFailures = tx_resp->failure_frame;
+                trace.firmwareStatus = status;
+            }
+            __atomic_store_n(&awdlNativeTraceArmed, uint32_t(0), __ATOMIC_RELEASE);
+            if (error || !(clock.flags&1) || delay<0 || delay>30000000) ++awdlNativeTimingInvalid;
+            else {
+                ++awdlNativeTimingSamples;
+                if (uint32_t(delay)>awdlNativeMaxCompletionUs) awdlNativeMaxCompletionUs=uint32_t(delay);
+            }
+        }
     }
 #endif
     
@@ -6913,17 +6946,23 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     int type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     int min_ridx = iwx_rval2ridx(ieee80211_min_basic_rate(ic));
 #ifdef ITLWM_AWDL_EXPERIMENTAL
-    // AWDL management frames use the 6 Mbit/s OFDM basic rate, including
-    // channel 6. Do not inherit an infrastructure BSS's CCK basic rate.
+    // Radio diagnostics use 6 Mbit/s OFDM, including channel 6. The separate
+    // native-template TX qualification uses its validated staged minimum rate.
+    // The monitor station has no infrastructure link-quality table. Unicast
+    // data must also use CMD_RATE rather than firmware-selected STA rates.
     if (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR)
-        min_ridx = iwx_rval2ridx(12);
+        min_ridx = iwx_rval2ridx(awdlNativeTxQualification ? awdlNativeRateMbps * 2 : 12);
 #endif
     int ridx, rate_flags;
     uint8_t cmdver;
     uint8_t hwrate;
 
     *flags = 0;
-    if (IEEE80211_IS_MULTICAST(wh->i_addr1) ||
+    if (
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        (awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) ||
+#endif
+        IEEE80211_IS_MULTICAST(wh->i_addr1) ||
         type != IEEE80211_FC0_TYPE_DATA) {
         /* for non-data, use the lowest supported rate */
         ridx = min_ridx;
@@ -7041,6 +7080,10 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     wh = mtod(m, struct ieee80211_frame *);
     type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
     subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+#ifdef AIRPORT_WCL
+    const int trafficAC = ieee80211_has_qos(wh) ?
+        ieee80211_wcl_ac(ieee80211_get_qos(wh) & IEEE80211_QOS_TID) : EDCA_AC_BE;
+#endif
     if (type == IEEE80211_FC0_TYPE_CTL)
         hdrlen = sizeof(struct ieee80211_frame_min);
     else
@@ -7142,6 +7185,16 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     if (hdrlen % 4)
         offload_assist |= IWX_TX_CMD_OFFLD_PAD;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Linux v6.12 mvm/tx.c iwl_mvm_tx_csum() supplies the MAC header
+    // length even for management frames without checksum offload. Keep this
+    // qualification change isolated until its firmware behavior is measured.
+    if (awdlNativeTxQualification && ic->ic_opmode == IEEE80211_M_MONITOR) {
+        static_assert(IWX_TX_CMD_OFFLD_MH_SIZE(24 / 2) == 0x0c00,
+            "unprotected action header length is twelve 16-bit words");
+        offload_assist |= IWX_TX_CMD_OFFLD_MH_SIZE(hdrlen / 2);
+    }
+#endif
     
     if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
         tx_gen3 = (struct iwx_tx_cmd_gen3 *)cmd->data;
@@ -7227,6 +7280,10 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     
     /* Kick TX ring. */
     ring->cur = (ring->cur + 1) % getTxQueueSize();
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeTxQualification)
+        awdlNativeTxDoorbell(ring->qid,idx,ring->cur,offload_assist,hdrlen);
+#endif
     IWX_WRITE(sc, IWX_HBUS_TARG_WRPTR, ring->qid << 16 | ring->cur);
     
     /* Mark TX ring as full if we reach a certain threshold. */
@@ -7235,6 +7292,10 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
         sc->qfullmsk |= 1 << ring->qid;
     }
     
+#ifdef AIRPORT_WCL
+    if (type == IEEE80211_FC0_TYPE_DATA && !(subtype & IEEE80211_FC0_SUBTYPE_NODATA))
+        ++ic->ic_wcl_tx_packets[trafficAC];
+#endif
     return 0;
 }
 
@@ -7540,6 +7601,12 @@ iwx_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
         else
             IEEE80211_ADDR_COPY(&add_sta_cmd.addr,
                                 in->in_macaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // The P2P device uses a broadcast station, not the listener's
+        // zero-address sniffer station. Both use GENERAL_PURPOSE + MGMT_TID.
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification && ic->ic_opmode == IEEE80211_M_MONITOR)
+            IEEE80211_ADDR_COPY(&add_sta_cmd.addr,etherbroadcastaddr);
+#endif
     }
     add_sta_cmd.add_modify = update ? 1 : 0;
     add_sta_cmd.station_flags_msk
@@ -8137,6 +8204,13 @@ iwx_umac_scan(struct iwx_softc *sc, int bgscan)
     size_t req_len;
     int err, async = bgscan;
     const uint32_t timeout = bgscan ?  htole32(120) : htole32(0);
+#ifdef AIRPORT_WCL
+    const auto timing = AirportWCL::scanTiming(ic->ic_wcl_scan_away_time_ms, bgscan,
+        isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_FRAGMENTED_SCAN));
+    const uint32_t maxOut = htole32(timing.maxOutTU);
+#else
+    const uint32_t maxOut = timeout;
+#endif
     uint8_t scan_ver = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_SCAN_REQ_UMAC);
     
     if (scan_ver == 12)
@@ -8175,12 +8249,12 @@ iwx_umac_scan(struct iwx_softc *sc, int bgscan)
             htole16(IWX_SCAN_ADWELL_MAX_BUDGET_FULL_SCAN);
         
         req->v7.scan_priority = htole32(IWX_SCAN_PRIORITY_EXT_6);
-        req->v7.max_out_time[IWX_SCAN_LB_LMAC_IDX] = timeout;
+        req->v7.max_out_time[IWX_SCAN_LB_LMAC_IDX] = maxOut;
         req->v7.suspend_time[IWX_SCAN_LB_LMAC_IDX] = timeout;
         
         if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
             req->v7.max_out_time[IWX_SCAN_HB_LMAC_IDX] =
-                timeout;
+                maxOut;
             req->v7.suspend_time[IWX_SCAN_HB_LMAC_IDX] =
                 timeout;
         }
@@ -8209,7 +8283,7 @@ iwx_umac_scan(struct iwx_softc *sc, int bgscan)
         
         if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
             req->v6.max_out_time[IWX_SCAN_HB_LMAC_IDX] =
-                timeout;
+                maxOut;
             req->v6.suspend_time[IWX_SCAN_HB_LMAC_IDX] =
                 timeout;
         }
@@ -8217,7 +8291,7 @@ iwx_umac_scan(struct iwx_softc *sc, int bgscan)
         req->v6.scan_priority =
             htole32(IWX_SCAN_PRIORITY_EXT_6);
         req->v6.max_out_time[IWX_SCAN_LB_LMAC_IDX] =
-            timeout;
+            maxOut;
         req->v6.suspend_time[IWX_SCAN_LB_LMAC_IDX] =
             timeout;
     }
@@ -8275,6 +8349,21 @@ iwx_umac_scan(struct iwx_softc *sc, int bgscan)
         htole32(IWX_UMAC_SCAN_GEN_FLAGS_EXTENDED_DWELL);
     }
     
+#ifdef AIRPORT_WCL
+    if (timing.fragmented) {
+        req->general_flags &= ~htole16(IWX_UMAC_SCAN_GEN_FLAGS_EXTENDED_DWELL);
+        req->general_flags |= htole16(IWX_UMAC_SCAN_GEN_FLAGS_FRAGMENTED);
+        bool cdb = isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT);
+        if (cdb)
+            req->general_flags |= htole16(IWX_UMAC_SCAN_GEN_FLAGS_LMAC2_FRAGMENTED);
+        if (isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_ADAPTIVE_DWELL_V2)) {
+            req->v8.num_of_fragments[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+            if (cdb)
+                req->v8.num_of_fragments[IWX_SCAN_HB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+        }
+    }
+#endif
+
     if (isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_SCAN_EXT_CHAN_VER))
         err = iwx_fill_probe_req(sc, &tail->preq);
     else
@@ -8314,6 +8403,13 @@ iwx_umac_scan_v12(struct iwx_softc *sc, int bgscan)
     size_t req_len;
     uint16_t gen_flags = 0;
     const uint32_t timeout = bgscan ?  htole32(120) : htole32(0);
+#ifdef AIRPORT_WCL
+    const auto timing = AirportWCL::scanTiming(ic->ic_wcl_scan_away_time_ms, bgscan,
+        isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_FRAGMENTED_SCAN));
+    const uint32_t maxOut = htole32(timing.maxOutTU);
+#else
+    const uint32_t maxOut = timeout;
+#endif
     struct iwx_scan_general_params_v10 *general_params;
     struct iwx_scan_channel_params_v4 *cp;
     struct iwx_host_cmd hcmd = {
@@ -8343,6 +8439,16 @@ iwx_umac_scan_v12(struct iwx_softc *sc, int bgscan)
     gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_PASS_ALL |
     IWX_UMAC_SCAN_GEN_FLAGS_V2_ADAPTIVE_DWELL;
     
+#ifdef AIRPORT_WCL
+    if (timing.fragmented) {
+        gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_FRAGMENTED_LMAC1;
+        general_params->num_of_fragments[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+        if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
+            gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_FRAGMENTED_LMAC2;
+            general_params->num_of_fragments[IWX_SCAN_HB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+        }
+    }
+#endif
     req->scan_params.general_params.flags = gen_flags;
     
     general_params->adwell_default_social_chn =
@@ -8359,14 +8465,14 @@ iwx_umac_scan_v12(struct iwx_softc *sc, int bgscan)
     
     general_params->scan_priority = htole32(IWX_SCAN_PRIORITY_EXT_6);
     general_params->max_out_of_time[IWX_SCAN_LB_LMAC_IDX] =
-        timeout;
+        maxOut;
     general_params->suspend_time[IWX_SCAN_LB_LMAC_IDX] =
         timeout;
     
-    general_params->max_out_of_time[IWX_SCAN_HB_LMAC_IDX] =
-        timeout;
-    general_params->suspend_time[IWX_SCAN_HB_LMAC_IDX] =
-        timeout;
+    if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
+        general_params->max_out_of_time[IWX_SCAN_HB_LMAC_IDX] = maxOut;
+        general_params->suspend_time[IWX_SCAN_HB_LMAC_IDX] = timeout;
+    }
 
     general_params->active_dwell[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_DWELL_ACTIVE;
     general_params->passive_dwell[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_DWELL_PASSIVE;
@@ -8426,6 +8532,13 @@ iwx_umac_scan_v14(struct iwx_softc *sc, int bgscan)
     struct iwx_scan_general_params_v10 *general_params;
     struct iwx_scan_channel_params_v6 *cp;
     const uint32_t timeout = bgscan ?  htole32(120) : htole32(0);
+#ifdef AIRPORT_WCL
+    const auto timing = AirportWCL::scanTiming(ic->ic_wcl_scan_away_time_ms, bgscan,
+        isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_FRAGMENTED_SCAN));
+    const uint32_t maxOut = htole32(timing.maxOutTU);
+#else
+    const uint32_t maxOut = timeout;
+#endif
     struct iwx_host_cmd hcmd = {
         .id = iwx_cmd_id(IWX_SCAN_REQ_UMAC, IWX_LONG_GROUP, 0),
         .len = { 0, },
@@ -8453,6 +8566,16 @@ iwx_umac_scan_v14(struct iwx_softc *sc, int bgscan)
     gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_PASS_ALL |
     IWX_UMAC_SCAN_GEN_FLAGS_V2_ADAPTIVE_DWELL;
     
+#ifdef AIRPORT_WCL
+    if (timing.fragmented) {
+        gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_FRAGMENTED_LMAC1;
+        general_params->num_of_fragments[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+        if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
+            gen_flags |= IWX_UMAC_SCAN_GEN_FLAGS_V2_FRAGMENTED_LMAC2;
+            general_params->num_of_fragments[IWX_SCAN_HB_LMAC_IDX] = IWL_SCAN_NUM_OF_FRAGS;
+        }
+    }
+#endif
     req->scan_params.general_params.flags = gen_flags;
     
     general_params->adwell_default_social_chn =
@@ -8468,14 +8591,14 @@ iwx_umac_scan_v14(struct iwx_softc *sc, int bgscan)
     
     general_params->scan_priority = htole32(IWX_SCAN_PRIORITY_EXT_6);
     general_params->max_out_of_time[IWX_SCAN_LB_LMAC_IDX] =
-        timeout;
+        maxOut;
     general_params->suspend_time[IWX_SCAN_LB_LMAC_IDX] =
         timeout;
     
-    general_params->max_out_of_time[IWX_SCAN_HB_LMAC_IDX] =
-        timeout;
-    general_params->suspend_time[IWX_SCAN_HB_LMAC_IDX] =
-        timeout;
+    if (isset(sc->sc_enabled_capa, IWX_UCODE_TLV_CAPA_CDB_SUPPORT)) {
+        general_params->max_out_of_time[IWX_SCAN_HB_LMAC_IDX] = maxOut;
+        general_params->suspend_time[IWX_SCAN_HB_LMAC_IDX] = timeout;
+    }
 
     general_params->active_dwell[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_DWELL_ACTIVE;
     general_params->passive_dwell[IWX_SCAN_LB_LMAC_IDX] = IWL_SCAN_DWELL_PASSIVE;
@@ -8702,10 +8825,37 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
     else
         panic("unsupported operating mode %d\n", ic->ic_opmode);
     cmd->tsf_id = htole32(IWX_TSF_ID_A);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (ic->ic_opmode == IEEE80211_M_MONITOR && awdlNativeRadioOwner && awdlNativeP2pQualification)
+        cmd->mac_type = htole32(IWX_FW_MAC_TYPE_P2P_DEVICE);
+#endif
     
     IEEE80211_ADDR_COPY(cmd->node_addr, ic->ic_myaddr);
     if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification))
+            IEEE80211_ADDR_COPY(cmd->node_addr,awdlNativeAddress);
+#endif
         IEEE80211_ADDR_COPY(cmd->bssid_addr, etherbroadcastaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification)) {
+            // Listener TX and a P2P MAC (with autonomous ACKs) both need a
+            // populated context, as in iwlwifi's mac_ctxt_cmd_common path.
+            // There is no associated BSS: use mandatory fallback rates and
+            // standard OFDM EDCA, not the previous infrastructure AP's state.
+            cmd->cck_rates = htole32(IEEE80211_IS_CHAN_2GHZ(ic->ic_ibss_chan) ? 1 : 0);
+            cmd->ofdm_rates = htole32(IWX_RATE_BIT_MSK(6) >> IWX_FIRST_OFDM_RATE);
+            for (i = 0; i < EDCA_NUM_AC; ++i) {
+                const auto &ac = ieee80211_edca_table[IEEE80211_MODE_11G][i];
+                const auto ucode_ac = iwx_mvm_mac80211_ac_to_ucode_ac((enum ieee80211_edca_ac)i);
+                cmd->ac[ucode_ac].cw_min = htole16(IWX_EXP2(ac.ac_ecwmin));
+                cmd->ac[ucode_ac].cw_max = htole16(IWX_EXP2(ac.ac_ecwmax));
+                cmd->ac[ucode_ac].aifsn = ac.ac_aifsn;
+                cmd->ac[ucode_ac].fifos_mask = 1 << iwx_ac_to_tx_fifo[i];
+                cmd->ac[ucode_ac].edca_txop = htole16(ac.ac_txoplimit * 32);
+            }
+        }
+#endif
         return;
     }
     
@@ -8830,6 +8980,12 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
                                     IWX_MAC_FILTER_IN_BEACON |
                                     IWX_MAC_FILTER_IN_PROBE_REQUEST |
                                     IWX_MAC_FILTER_IN_CRC32);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // Observe action/control traffic and preserve the monitor decoder's
+        // explicit FCS contract. P2P qualification does not need data promiscuity.
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification)
+            cmd.filter_flags &= ~htole32(IWX_MAC_FILTER_IN_PROMISC);
+#endif
     } else if (!assoc || !ni->ni_associd || !ni->ni_dtimperiod)
     /*
      * Allow beacons to pass through as long as we are not
@@ -9688,6 +9844,20 @@ iwx_auth(struct iwx_softc *sc)
     
     splassert(IPL_NET);
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // The non-MLO firmware reserves MAC0 for managed/IBSS interfaces (see
+    // iwlwifi's iwl_mvm_mac_ctxt_init). The bounded native TX/P2P lease owns
+    // the only active MAC, so MAC1 is available. This is not a station/queue
+    // ID. Binding, ADD_STA and power commands all consume in_id below.
+    static_assert(IWX_NUM_MAC_INDEX_DRIVER > 1, "listener MAC context available");
+    const uint16_t macId = ic->ic_opmode == IEEE80211_M_MONITOR &&
+        awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification) ? 1 : 0;
+    const auto active = sc->sc_flags &
+        (IWX_FLAG_MAC_ACTIVE | IWX_FLAG_BINDING_ACTIVE | IWX_FLAG_STA_ACTIVE);
+    if (active && in->in_id != macId) return EBUSY;
+    if (!active) { in->in_id = macId; in->in_color = 0; }
+#endif
+
     in->in_ni.ni_chw = IEEE80211_CHAN_WIDTH_20_NOHT;
     in->in_ni.ni_flags &= ~(IEEE80211_NODE_HT |
                             IEEE80211_NODE_QOS |
@@ -9962,8 +10132,13 @@ iwx_run(struct iwx_softc *sc)
         }
     }
     
-    if (ic->ic_opmode == IEEE80211_M_MONITOR)
+    if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        if (awdlNativeRadioOwner && awdlNativeP2pQualification)
+            return awdlStartNativeP2pSession();
+#endif
         return 0;
+    }
     
     /* Start at lowest available bit-rate. Firmware will raise. */
     in->in_ni.ni_txrate = 0;
@@ -10272,7 +10447,10 @@ out:
     if (generation == sc->sc_generation && (sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
 #ifdef ITLWM_AWDL_EXPERIMENTAL
         if (that->awdlActive() && ic->ic_opmode == IEEE80211_M_MONITOR) {
-            if (err) that->awdlStop(ItlAwdlRadioError, err);
+            if (err) {
+                that->awdlRecordNativeRadioReset(NativeResetState,err,nstate);
+                that->awdlStop(ItlAwdlRadioError, err);
+            }
             else {
                 sc->sc_newstate(ic, nstate, arg);
                 if (nstate == IEEE80211_S_RUN) that->awdl.session = ItlAwdlListening;
@@ -10454,6 +10632,16 @@ int ItlIwx::
 iwx_sf_config(struct iwx_softc *sc, int new_state)
 {
     struct ieee80211com *ic = &sc->sc_ic;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeRadioOwner && (awdlNativeTxQualification || awdlNativeP2pQualification) &&
+        ic->ic_opmode == IEEE80211_M_MONITOR) {
+        // Intel's sf_update uses UNINIT for a single non-STA MAC. FULL_ON
+        // assumes an associated AP, which this explicit listener lease lacks.
+        // Firmware advertising SF offload does not take host configuration.
+        if (isset(sc->sc_ucode_api, IWX_UCODE_TLV_API_SMART_FIFO_OFFLOAD)) return 0;
+        if (new_state == IWX_SF_FULL_ON) new_state = IWX_SF_UNINIT;
+    }
+#endif
     struct iwx_sf_cfg_cmd sf_cmd = {
         .state = htole32(new_state),
     };
@@ -11028,6 +11216,11 @@ iwx_stop(struct _ifnet *ifp)
         in->in_phyctxt = NULL;
         in->in_ni.ni_chw = IEEE80211_CHAN_WIDTH_20_NOHT;
         IEEE80211_ADDR_COPY(in->in_macaddr, etheranyaddr);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        // Firmware has stopped and no context is active. Also restore this
+        // on timeout/error/controller stop, before infrastructure can restart.
+        in->in_id = in->in_color = 0;
+#endif
     }
     
     sc->sc_flags &= ~(IWX_FLAG_SCANNING | IWX_FLAG_BGSCAN);
@@ -11068,6 +11261,9 @@ iwx_watchdog(struct _ifnet *ifp)
     if (sc->sc_tx_timer > 0) {
         if (--sc->sc_tx_timer == 0) {
             XYLog("%s: device timeout\n", DEVNAME(sc));
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+            that->awdlRecordNativeRadioReset(NativeResetWatchdog);
+#endif
 #ifdef IWX_DEBUG
             int i;
 
@@ -11238,6 +11434,11 @@ iwx_nic_umac_error(struct iwx_softc *sc)
 {
     struct iwx_umac_error_event_table table;
     uint32_t base;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    auto fault=awdlNativeRadioOwner && awdlActive() && !awdlNativeFault.umac.readStatus ?
+        &awdlNativeFault.umac : nullptr;
+    if (fault) fault->readStatus=1;
+#endif
     
     base = sc->sc_uc.uc_umac_error_event_table;
     
@@ -11247,10 +11448,23 @@ iwx_nic_umac_error(struct iwx_softc *sc)
         return;
     }
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) fault->readStatus=2;
+#endif
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
         XYLog("%s: reading errlog failed\n", DEVNAME(sc));
         return;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) {
+        fault->readStatus=table.valid ? 4 : 3;
+        if (table.valid) {
+            fault->errorId=table.error_id; fault->data1=table.data1;
+            fault->data2=table.data2; fault->data3=table.data3;
+            fault->command=table.cmd_header;
+        }
+    }
+#endif
     
     if (ERROR_START_OFFSET <= table.valid * ERROR_ELEM_SIZE) {
         XYLog("%s: Start UMAC Error Log Dump:\n", DEVNAME(sc));
@@ -11331,6 +11545,11 @@ iwx_nic_error(struct iwx_softc *sc)
 {
     struct iwx_error_event_table table;
     uint32_t base;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    auto fault=awdlNativeRadioOwner && awdlActive() && !awdlNativeFault.lmac.readStatus ?
+        &awdlNativeFault.lmac : nullptr;
+    if (fault) fault->readStatus=1;
+#endif
     
     XYLog("%s: dumping device error log\n", DEVNAME(sc));
     base = sc->sc_uc.uc_lmac_error_event_table[0];
@@ -11340,10 +11559,24 @@ iwx_nic_error(struct iwx_softc *sc)
         return;
     }
     
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) fault->readStatus=2;
+#endif
     if (iwx_read_mem(sc, base, &table, sizeof(table)/sizeof(uint32_t))) {
         XYLog("%s: reading errlog failed\n", DEVNAME(sc));
         return;
     }
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (fault) {
+        fault->readStatus=table.valid ? 4 : 3;
+        if (table.valid) {
+            fault->errorId=table.error_id; fault->data1=table.data1;
+            fault->data2=table.data2; fault->data3=table.data3;
+            fault->command=table.hcmd; fault->lastCommand=table.last_cmd_id;
+            fault->time=table.gp2;
+        }
+    }
+#endif
     
     if (!table.valid) {
         XYLog("%s: errlog not found, skipping\n", DEVNAME(sc));
@@ -11626,6 +11859,9 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                              IWX_CT_KILL_NOTIFICATION): {
                 struct iwx_ct_kill_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_ct_kill_notif *);
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                awdlRecordNativeRadioReset(NativeResetThermal,le16toh(notif->temperature));
+#endif
                 XYLog("%s: device at critical temperature (%u degC), "
                        "stopping device\n",
                        DEVNAME(sc), le16toh(notif->temperature));
@@ -11792,6 +12028,12 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             }
                 
             case IWX_WIDE_ID(IWX_MAC_CONF_GROUP, IWX_SESSION_PROTECTION_NOTIF): {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                if (awdlNativeRadioOwner && awdlNativeP2pQualification) {
+                    awdlNativeP2pSession.observe(pkt->data,iwx_rx_packet_payload_len(pkt),sc->sc_generation);
+                    break;
+                }
+#endif
                 struct iwx_session_prot_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_session_prot_notif *);
                 if (!notif->status) {
@@ -11884,6 +12126,14 @@ iwx_notif_intr(struct iwx_softc *sc)
 {
     struct mbuf_list ml = MBUF_LIST_INITIALIZER();
     uint16_t hw;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    if (awdlNativeTxQualification) {
+        uint64_t now=0, nanos=0;
+        clock_get_uptime(&now); absolutetime_to_nanoseconds(now,&nanos);
+        awdlNativeBatchHostUs = nanos/1000;
+        awdlNativeBatchFilterAbsolute = __atomic_load_n(&awdlNativeFilterAbsolute,__ATOMIC_ACQUIRE);
+    }
+#endif
     
     //    bus_dmamap_sync(sc->sc_dmat, sc->rxq.stat_dma.map,
     //        0, sc->rxq.stat_dma.size, BUS_DMASYNC_POSTREAD);
@@ -11972,6 +12222,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     
     if (r1 & IWX_CSR_INT_BIT_RF_KILL) {
         handled |= IWX_CSR_INT_BIT_RF_KILL;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetRfKill,r1,r2);
+#endif
         XYLog("%s RF_KILL has been toggled\n", __FUNCTION__);
         that->iwx_check_rfkill(sc);
         task_add(systq, &sc->init_task);
@@ -11980,6 +12233,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (r1 & IWX_CSR_INT_BIT_SW_ERR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetFirmware,r1,r2);
+#endif
 #if 1 /* usually #ifdef IWX_DEBUG but always enabled for now */
         int i;
         
@@ -12008,6 +12264,9 @@ iwx_intr(OSObject *object, IOInterruptEventSource* sender, int count)
     
     if (r1 & IWX_CSR_INT_BIT_HW_ERR) {
         handled |= IWX_CSR_INT_BIT_HW_ERR;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetHardware,r1,r2);
+#endif
         XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -12092,6 +12351,9 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
     if ((inta_fh & IWX_MSIX_FH_INT_CAUSES_FH_ERR) ||
         (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_SW_ERR) ||
         (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_SW_ERR_V2)) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetFirmware,inta_fh,inta_hw);
+#endif
 #if 1 /* usually #ifdef IWX_DEBUG but always enabled for now */
         int i;
         
@@ -12117,11 +12379,17 @@ iwx_intr_msix(OSObject *object, IOInterruptEventSource* sender, int count)
     }
     
     if (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_RF_KILL) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetRfKill,inta_fh,inta_hw);
+#endif
         that->iwx_check_rfkill(sc);
         task_add(systq, &sc->init_task);
     }
     
     if (inta_hw & IWX_MSIX_HW_INT_CAUSES_REG_HW_ERR) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+        that->awdlRecordNativeRadioReset(NativeResetHardware,inta_fh,inta_hw);
+#endif
         XYLog("%s: hardware error, stopping device \n", DEVNAME(sc));
         if ((sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
             sc->sc_flags |= IWX_FLAG_HW_ERR;
@@ -13439,6 +13707,16 @@ bool ItlIwx::
 intrFilter(OSObject *object, IOFilterInterruptEventSource *src)
 {
     ItlIwx *that = (ItlIwx*)object;
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+    // Interrupt context: one clock read and lock-free atomics only. Do not
+    // inspect native objects, take the command gate, allocate or log here.
+    static_assert(__atomic_always_lock_free(sizeof(uint64_t),nullptr), "interrupt timestamp must be lock-free");
+    if (__atomic_load_n(&that->awdlNativeTraceArmed,__ATOMIC_ACQUIRE)) {
+        uint64_t now = 0;
+        clock_get_uptime(&now);
+        __atomic_store_n(&that->awdlNativeFilterAbsolute,now,__ATOMIC_RELEASE);
+    }
+#endif
     IWX_WRITE(&that->com, IWX_CSR_INT_MASK, 0);
     return true;
 }
@@ -13839,6 +14117,7 @@ iwx_init_task(void *arg1)
 #ifdef ITLWM_AWDL_EXPERIMENTAL
     if (that->awdlActive()) {
         bool exclusive = !that->awdlLinked();
+        that->awdlRecordNativeRadioReset(NativeResetUnknown);
         that->awdlStop(ItlAwdlRadioError, EIO);
         if (exclusive) return;
     }
@@ -13923,8 +14202,12 @@ iwx_activate(struct iwx_softc *sc, int act)
             break;
         case DVACT_WAKEUP:
             /* Hardware should be up at this point. */
-            if (iwx_set_hw_ready(sc))
+            if (iwx_set_hw_ready(sc)) {
+#ifdef ITLWM_AWDL_EXPERIMENTAL
+                awdlRecordNativeRadioReset(NativeResetWake);
+#endif
                 task_add(systq, &sc->init_task);
+            }
             break;
     }
     
