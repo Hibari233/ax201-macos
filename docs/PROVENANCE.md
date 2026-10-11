@@ -1,9 +1,21 @@
 # Provenance and credits
 
-This repository preserves the history of laobamac/itlwm at
+This repository was forked from laobamac/itlwm at
 `9bc4b4d6e5f5f96d0687d42385b77f81768b9e83`, itself derived from
 OpenIntelWireless/itlwm and OpenBSD network drivers. The unmodified upstream README
 is kept in [UPSTREAM.md](UPSTREAM.md), including its contributors and acknowledgements.
+
+Upstream history is merged through
+[`a01d1d5f0b780f8916702951bd9983a383e03cc2`](https://github.com/laobamac/itlwm/commit/a01d1d5f0b780f8916702951bd9983a383e03cc2).
+The seven commits since the fork point add native channel information and traffic
+counters, apply WCL scan timing with non-CDB firmware handling, and fix receive
+buffer ownership, Skywalk packet handling and link-quality reporting. The pinned
+upstream revision is recorded in `dependencies.lock.json`.
+
+This integration preserves the fork's experimental AWDL code and Wi-Fi request
+guards. It does not establish WPA3 or native AirDrop support, or resolve the
+native receive-path panic documented in [VALIDATION.md](VALIDATION.md). A source
+merge and successful offline builds do not constitute hardware acceptance.
 
 The imported development work adds optional AWDL diagnostics, parsing, timing,
 regulatory guards, restoration handling, compile-only Sequoia ABI declarations,
