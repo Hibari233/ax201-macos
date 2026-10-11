@@ -1702,3 +1702,45 @@ No interface, transport queue or BSD interface was enabled by this diagnostic.
 The single retained manager persisted, WPA2 passed 33/33 pings, and post-test
 GPU/display/power checks passed. This records an integration boundary, not a fix
 for synchronization or evidence that native AirDrop works.
+
+
+## Native ARPA decoder panic and recovery — 2026-10-11
+
+The revision 61 connection loss is now backed by a recovered kernel panic in
+`IO80211ServiceRequestDescriptor::awdlUncompressData`, source line 1923
+(`bufout overflow`). Its caller chain passes through `initWithArpaTLV`,
+`IO80211AWDLPeer::actionFrameReport`, and the native action-frame processing
+thread. This locates the failing receive/service-record path. It does not
+establish that invoking native enable on the timer thread caused the panic.
+The crashed frame, scratch-buffer contents and first runtime stage were not
+persisted; the runtime log is empty and its progress file is absent.
+
+Inspection of the exact 24H32 image found that the checked scratch-buffer
+sentinels are initialized by the local service-registration constructor.
+A private offline replay of the unmodified decoder used synthetic short PTR
+and SRV descriptors, relocated code/callback addresses together, and bounded
+allocator/libc substitutes. Literal names avoided the compression dictionary;
+the native initialization prefix was tested with its dictionary-length loop
+skipped. Both cold cases reached the guard panic, without changing either
+guard byte; the PTR case matched source line 1923. Both cases returned success
+after executing the native scratch initialization prefix. This supports a
+missing-initialization hypothesis, not a replay of the actual crashed packet
+or a verified live fix. A normal service-registration lifecycle must be
+integrated and checked; patching native sentinels is not a repair.
+
+Revision 60 was restored transactionally and its EFI hash and loaded UUID
+were verified. Recovery checks passed GPU/display/power invariants, retained
+the 240 Hz display mode, and recorded 15/15 Wi-Fi pings across three samples.
+The user confirmed a responsive desktop; a later connection observed the
+same boot at 39 minutes. No native runtime was invoked in this recovery boot.
+These observations establish recovery during the observed interval, not
+long-duration driver qualification.
+
+Candidate `e467c76d42ac628ecdfc839329928de4eae311f9` (revision 62) remains
+uninstalled. Its control-thread activation change, channel checks and phase
+logging do not by themselves address the recovered decoder panic. Its prior
+14-suite UBSan/five-Python validation, 79-source driver/eight-tool build,
+560-slot/63-method fixture and concrete ABI comparisons, and
+[exact-source CI](https://github.com/Hibari233/ax201-macos/actions/runs/38082750371)
+passed. None verifies native peer discovery, IPv6 packet transport, actual
+AirDrop transfer or repeated-session recovery; all remain unfinished.
